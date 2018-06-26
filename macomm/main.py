@@ -181,9 +181,9 @@ for i_episode in range(NUM_EPISODES):
             episode_rewards.append(episode_reward[0,0,0])
             communication_rewards.append(communication_reward[0,0,0])
             communication_rewards_all.append(communication_reward)
-            if i_episode%100 == 0:
-                plot_durations(episode_rewards)           
-                plot_durations(communication_rewards)
+            #if i_episode%100 == 0:
+            #    plot_durations(episode_rewards)           
+            #    plot_durations(communication_rewards)
             break
                 
         #if i_episode%100 == 0:
