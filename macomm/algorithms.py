@@ -5,7 +5,7 @@ import torch.optim as optim
 
 from macomm.agents import Actor, Critic
 from macomm.exploration import gumbel_softmax
-from macomm.environments import comm_env
+from macomm.environments import communication
 
 
 def soft_update(target, source, tau):
@@ -299,6 +299,8 @@ class MACDDPG(MADDPG):
         if self.normalized_rewards:
             r -= r.mean()
             r /= r.std()
+            t -= t.mean()
+            t /= t.std()
 
         R = self.comm_critics[i_agent](s, c)
 
@@ -307,7 +309,7 @@ class MACDDPG(MADDPG):
 
         W[mask] = self.comm_critics_target[i_agent](s_, c_).detach()
         
-        loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0))
+        loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0) + r[[i_agent],].squeeze(0))
 
         self.comm_critics_optim[i_agent].zero_grad()
         loss_comm_critic.backward()
@@ -329,11 +331,11 @@ class MACDDPG(MADDPG):
         Q = self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1),
                                   a[[i_agent],])
 
+        m_ = communication().get_m(s_, c_)
+        
         for i in range(self.num_agents):
             a_[i,] = gumbel_softmax(self.actors_target[i](K.cat([s_[[i],], m_], dim=-1)), exploration=False)
 
-        m_, _ = comm_env(s_, c_)
-        
         V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_], dim=-1),
                                                a_[[i_agent],]).detach()
 
@@ -343,6 +345,8 @@ class MACDDPG(MADDPG):
         loss_critic.backward()
         K.nn.utils.clip_grad_norm_(self.critics[i_agent].parameters(), 0.5)
         self.critics_optim[i_agent].step()
+
+        m = communication().get_m(s, c)
 
         for i in range(self.num_agents):
             a[i,] = gumbel_softmax(self.actors[i](K.cat([s[[i],], m], dim=-1)), exploration=False)
