@@ -24,7 +24,7 @@ class communication(object):
             if self.previous_granted_agent == granted_agent:
                 self.consecuitive_count += 1
                 if self.consecuitive_count > self.consecuitive_limit:
-                    comm_rewards -= (self.consecuitive_count - self.consecuitive_limit)
+                    comm_rewards -= 1#(self.consecuitive_count - self.consecuitive_limit)
             else:
                 self.previous_granted_agent = granted_agent
                 self.consecuitive_count = 0
