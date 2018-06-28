@@ -4,30 +4,46 @@ from multiagent.environment import MultiAgentEnv
 import multiagent.scenarios as scenarios
 
 class communication(object):
-    def __init__(self, consecuitive_limit=5):
+    def __init__(self, protocol_type=2, consecuitive_limit=5, num_agents=3):
+        self.protocol_type = protocol_type
         self.consecuitive_limit = consecuitive_limit
+        self.num_agents = num_agents
         self.previous_granted_agent = None
         self.consecuitive_count = 0
+        self.comm_hist = K.zeros((num_agents, consecuitive_limit, 1), dtype=K.uint8)
+
+    def reset(self):
+        self.previous_granted_agent = None
+        self.consecuitive_count = 0
+        self.comm_hist = K.zeros((self.num_agents, self.consecuitive_limit, 1), dtype=K.uint8)
 
     def step(self, observations, comm_actions):
         
-        comm_rewards = K.zeros(len(comm_actions), dtype=observations.dtype).view(-1,1,1)
+        comm_rewards = K.zeros(self.num_agents, dtype=observations.dtype).view(-1,1,1)
         
         if (comm_actions>0.5).sum().item() == 0: # channel stays idle
             comm_rewards -= 1
             medium = K.cat([K.zeros_like(observations[[0], ]), K.zeros((1,1,1), dtype=observations.dtype)], dim=-1)
         elif (comm_actions>0.5).sum().item() > 1: # collision
             comm_rewards[comm_actions>0.5] -= 1
-            medium = K.cat([K.zeros_like(observations[[0], ]), (len(comm_actions)+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
+            medium = K.cat([K.zeros_like(observations[[0], ]), (self.num_agents+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
         else:                                     # success
             granted_agent = K.argmax((comm_actions>0.5)).item()
-            if self.previous_granted_agent == granted_agent:
-                self.consecuitive_count += 1
-                if self.consecuitive_count > self.consecuitive_limit:
-                    comm_rewards -= 1#(self.consecuitive_count - self.consecuitive_limit)
-            else:
-                self.previous_granted_agent = granted_agent
-                self.consecuitive_count = 0
+            if self.protocol_type == 1:
+                if self.previous_granted_agent == granted_agent:
+                    self.consecuitive_count += 1
+                    if self.consecuitive_count > self.consecuitive_limit:
+                        comm_rewards -= 1#(self.consecuitive_count - self.consecuitive_limit)
+                else:
+                    self.previous_granted_agent = granted_agent
+                    self.consecuitive_count = 0
+            elif self.protocol_type == 2:
+                grant = K.zeros((self.num_agents,1,1), dtype=K.uint8)
+                grant[granted_agent,] = 1
+                self.comm_hist = K.cat((self.comm_hist[:,1::,], grant), dim=1)
+                comm_rewards[(self.comm_hist.sum(dim=1, keepdim=True) == self.consecuitive_limit) + 
+                             (self.comm_hist.sum(dim=1, keepdim=True) == 0)] -= 1
+                
             medium = K.cat([observations[[granted_agent], ], (granted_agent+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
 
             #if competitive_comm:
@@ -51,7 +67,7 @@ class communication(object):
 
 
         granted_agent = (comm_actions>0.5).argmax(dim=0)[:,0]
-        for i in range(observations.shape[0]):
+        for i in range(self.num_agents):
             #if competitive_comm:
             #    comm_rewards[i, granted_agent == i, :] = 1
             medium[:, granted_agent == i, :] = K.cat([observations[[i],][:, granted_agent==i, :], 
@@ -76,7 +92,7 @@ class communication(object):
                                                                                     device=observations.device),
                                                                         K.ones((1,1,1), 
                                                                                 dtype=observations.dtype, 
-                                                                                device=observations.device)*(len(comm_actions)+1)], 
+                                                                                device=observations.device)*(self.num_agents+1)], 
                                                                         dim=-1)
 
 
