@@ -2,6 +2,7 @@ import torch as K
 
 from multiagent.environment import MultiAgentEnv
 import multiagent.scenarios as scenarios
+import pdb
 
 class communication(object):
     def __init__(self, protocol_type=2, consecuitive_limit=5, num_agents=3):

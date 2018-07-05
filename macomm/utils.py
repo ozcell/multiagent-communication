@@ -141,8 +141,8 @@ def get_params(args=[], verbose=False):
     #                             'a_2mlp_c_1mlp', 'a_water_c_water',
     #                             'memory_water'], help="agent type")
 
-    parser.add_argument("--agent_type", default='simple',
-                        choices=['complex'], help="agent type")
+    parser.add_argument("--agent_type", default='basic',
+                        choices=['basic', 'developed'], help="agent type")
 
     # path arguments
     parser.add_argument('--exp_id', default='no_id',
@@ -287,7 +287,6 @@ class Summarizer:
         self.writer = SummaryWriter(self.path_summary)
         self.port = port
 
-        # pdb.set_trace()
         #print(path_summary)
         with open('{}/summary/log_record.pickle'.format(p),'rb') as f:
             pckl = pickle.load(f)

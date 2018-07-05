@@ -14,6 +14,10 @@ from macomm.experience import ReplayMemory, ReplayMemoryComm, Transition, Transi
 from macomm.exploration import OUNoise
 from macomm.utils import Saver, Summarizer, get_noise_scale, get_params, running_mean
 
+from madrl_environments.pursuit import MAWaterWorld_mod
+
+import pdb
+
 
 device = K.device("cuda" if K.cuda.is_available() else "cpu")
 dtype = K.float32
@@ -90,20 +94,26 @@ def init(config):
     else:
         action_space = env.action_space[0].n
 
-    comm_env = communication(protocol_type=PROTOCOL, 
-                             consecuitive_limit=CONS_LIM, 
-                             num_agents=num_agents)
-
     env.seed(SEED)
     K.manual_seed(SEED)
     np.random.seed(SEED)
     
     if config['agent_alg'] == 'MACDDPG':
         MODEL = MACDDPG
+        comm_env = communication(protocol_type=PROTOCOL, 
+                                 consecuitive_limit=CONS_LIM, 
+                                 num_agents=num_agents)
     elif config['agent_alg'] == 'MADDPG':
         MODEL = MADDPG
+        comm_env = None
     elif config['agent_alg'] == 'DDPG':
         MODEL = DDPG
+        comm_env = None
+
+    if config['agent_type'] == 'basic':
+        from macomm.agents.basic import Actor, Critic
+    elif config['agent_type'] == 'deep':
+        from macomm.agents.deep import Actor, Critic
     
     # utils
     summaries = (Summarizer(config['dir_summary_train'], config['port'], config['resume']),
@@ -120,28 +130,30 @@ def init(config):
     optimizer = (optim.Adam, (ACTOR_LR, CRITIC_LR)) # optimiser func, (actor_lr, critic_lr)
     loss_func = F.mse_loss
     model = MODEL(num_agents, observation_space, action_space, medium_space, optimizer, 
-                  loss_func, GAMMA, TAU, 
-                  discrete=DISCRETE, regularization=REGULARIZATION, normalized_rewards=NORMALIZED_REWARDS)
+                  Actor, Critic, loss_func, GAMMA, TAU, 
+                  discrete=DISCRETE, regularization=REGULARIZATION, normalized_rewards=NORMALIZED_REWARDS, 
+                  communication=comm_env
+                  )
     
     if config['resume'] != '':
         for i, param in enumerate(save_dict['model_params']):
             model.entities[i].load_state_dict(param)
     
     #memory initilization
-    if model.has_communication:
+    if model.communication is not None:
         memory = ReplayMemoryComm(MEM_SIZE)
     else:
         memory = ReplayMemory(MEM_SIZE)
         
-    args = (env, comm_env, memory, ounoise, comm_ounoise, config, summaries, saver, start_episode)
-            
-    return model, args
+    experiment_args = (env, comm_env, memory, ounoise, comm_ounoise, config, summaries, saver, start_episode)
+          
+    return model, experiment_args
 
-def run(model, args, train=True):
+def run(model, experiment_args, train=True):
 
     total_time_start =  time.time()
-    
-    env, comm_env, memory, ounoise, comm_ounoise, config, summaries, saver, start_episode = args
+
+    env, comm_env, memory, ounoise, comm_ounoise, config, summaries, saver, start_episode = experiment_args
     
     start_episode = start_episode if train else 0
     NUM_EPISODES = config['n_episodes'] if train else config['n_episodes_test'] 
@@ -174,7 +186,7 @@ def run(model, args, train=True):
 
             model.to_cpu()
             
-            if model.has_communication:
+            if model.communication is not None:
                 comm_actions = []
                 for i in range(model.num_agents): 
                     comm_action = model.select_comm_action(observations[[i], ], i, comm_ounoise if train else False)
@@ -189,12 +201,12 @@ def run(model, args, train=True):
             actions = []
             for i in range(model.num_agents):
                 if model.discrete:
-                    if model.has_communication:
+                    if model.communication is not None:
                         action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, train)
                     else:
                         action = model.select_action(observations[[i], ], i, train)
                 else:
-                    if model.has_communication:
+                    if model.communication is not None:
                         action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, ounoise if train else False)
                     else:
                         action = model.select_action(observations[[i], ], i, ounoise if train else False)
@@ -212,7 +224,7 @@ def run(model, args, train=True):
 
             # Store the transition in memory
             if train:
-                if model.has_communication:
+                if model.communication is not None:
                     memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards)
                 else:
                     memory.push(observations, actions, next_observations, rewards)
@@ -229,7 +241,7 @@ def run(model, args, train=True):
                     critic_losses = []
                     actor_losses = []                  
                     for i in range(env.n):
-                        if model.has_communication:
+                        if model.communication is not None:
                             batch = Transition_Comm(*zip(*memory.sample(config['batch_size'])))
                         else:
                             batch = Transition(*zip(*memory.sample(config['batch_size'])))
@@ -325,9 +337,9 @@ def run(model, args, train=True):
 if __name__ == '__main__':
 
     config = get_params(args=['--exp_id','wtf', '--agent_alg', 'MACDDPG'])
-    model, args = init(config)
+    model, experiment_args = init(config)
     
-    env, comm_env, memory, ounoise, comm_ounoise, config, summaries, saver, start_episode = args
+    env, comm_env, memory, ounoise, comm_ounoise, config, summaries, saver, start_episode = experiment_args
     
     tic = time.time()
     monitor = run(model, args, train=True)

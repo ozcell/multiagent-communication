@@ -3,9 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from macomm.agents import Actor, Critic
 from macomm.exploration import gumbel_softmax
-from macomm.environments import communication
+
+import pdb
 
 
 def soft_update(target, source, tau):
@@ -19,8 +19,8 @@ def hard_update(target, source):
 
 class MADDPG(object):
     
-    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, loss_func, gamma, tau, 
-                 discrete=True, regularization=False, normalized_rewards=False, dtype=K.float32, device="cuda"):
+    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, 
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, dtype=K.float32, device="cuda"):
         
         optimizer, lr = optimizer
         actor_lr, critic_lr = lr
@@ -34,7 +34,7 @@ class MADDPG(object):
         self.normalized_rewards = normalized_rewards
         self.dtype = dtype
         self.device = device
-        self.has_communication = False
+        self.communication = communication
         
         # model initialization
         self.entities = []
@@ -157,11 +157,11 @@ class DDPG(MADDPG):
     ''' This is a version of MADDPG where there is no centralized training. 
     Each critic only observes its own observation, not the entire state.
     '''
-    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, loss_func, gamma, tau, 
-                 discrete=True, regularization=False, normalized_rewards=False, dtype=K.float32, device="cuda"):
+    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, 
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, dtype=K.float32, device="cuda"):
         
-        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, loss_func, gamma, tau, 
-                         discrete, regularization, normalized_rewards, dtype, device)
+        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, 
+                         discrete, regularization, normalized_rewards, communication, dtype, device)
 
         optimizer, lr = optimizer
         _, critic_lr = lr
@@ -240,11 +240,11 @@ class DDPG(MADDPG):
 
 
 class MACDDPG(MADDPG):
-    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, loss_func, gamma, tau, 
-                 discrete=True, regularization=False, normalized_rewards=False, dtype=K.float32, device="cuda"):
+    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, 
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, dtype=K.float32, device="cuda"):
         
-        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, loss_func, gamma, tau, 
-                         discrete, regularization, normalized_rewards, dtype, device)
+        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, 
+                         discrete, regularization, normalized_rewards, communication, dtype, device)
 
         optimizer, lr = optimizer
         actor_lr, critic_lr = lr
@@ -258,7 +258,7 @@ class MACDDPG(MADDPG):
         self.normalized_rewards = normalized_rewards
         self.dtype = dtype
         self.device = device
-        self.has_communication = True
+        self.communication = communication
 
         # model initialization
         self.entities = []
@@ -393,7 +393,7 @@ class MACDDPG(MADDPG):
         Q = self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1),
                                   a[[i_agent],])
 
-        m_ = communication().get_m(s_, c_)
+        m_ = self.communication.get_m(s_, c_)
         
         for i in range(self.num_agents):
             a_[i,] = gumbel_softmax(self.actors_target[i](K.cat([s_[[i],], m_], dim=-1)), exploration=False)
@@ -408,7 +408,7 @@ class MACDDPG(MADDPG):
         K.nn.utils.clip_grad_norm_(self.critics[i_agent].parameters(), 0.5)
         self.critics_optim[i_agent].step()
 
-        m = communication().get_m(s, c)
+        m = self.communication.get_m(s, c)
 
         for i in range(self.num_agents):
             a[i,] = gumbel_softmax(self.actors[i](K.cat([s[[i],], m], dim=-1)), exploration=False)
