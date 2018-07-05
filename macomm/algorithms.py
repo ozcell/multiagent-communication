@@ -19,7 +19,7 @@ def hard_update(target, source):
 
 class MADDPG(object):
     
-    def __init__(self, num_agents, observation_space, action_space, optimizer, loss_func, gamma, tau, 
+    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, loss_func, gamma, tau, 
                  discrete=True, regularization=False, normalized_rewards=False, dtype=K.float32, device="cuda"):
         
         optimizer, lr = optimizer
@@ -34,8 +34,10 @@ class MADDPG(object):
         self.normalized_rewards = normalized_rewards
         self.dtype = dtype
         self.device = device
+        self.has_communication = False
         
         # model initialization
+        self.entities = []
         
         # actors
         self.actors = []
@@ -50,6 +52,10 @@ class MADDPG(object):
         for i in range(num_agents):
             hard_update(self.actors_target[i], self.actors[i])
 
+        self.entities.extend(self.actors)
+        self.entities.extend(self.actors_target)
+        self.entities.extend(self.actors_optim)
+
         # critics   
         self.critics = []
         self.critics_target = []
@@ -61,7 +67,32 @@ class MADDPG(object):
             self.critics_optim.append(optimizer(self.critics[i].parameters(), lr = critic_lr))
                 
         for i in range(num_agents):
-            hard_update(self.critics_target[i], self.critics[i])         
+            hard_update(self.critics_target[i], self.critics[i])
+
+        self.entities.extend(self.critics)
+        self.entities.extend(self.critics_target)
+        self.entities.extend(self.critics_optim)
+
+    def to_cpu(self):
+        for entity in self.entities:
+            if type(entity) != type(self.actors_optim[0]):
+                entity.cpu()
+        self.device = 'cpu'
+
+    def to_cuda(self):        
+        for entity in self.entities:
+            if type(entity) != type(self.actors_optim[0]):
+                entity.cuda()
+        self.device = 'cuda'     
+
+    def get_save_dict(self):
+        """
+        Save trained parameters of all agents into one file
+        """
+        # move parameters to CPU before saving
+        self.to_cpu()
+        save_dict = {'agent_params': [i.get_params() for i in self.agents]}
+        return save_dict     
     
     def select_action(self, state, i_agent, exploration=False):
         with K.no_grad():
@@ -122,18 +153,26 @@ class MADDPG(object):
         return loss_critic.item(), loss_actor.item()      
 
 
-class MADDPG_NC(MADDPG):
+class DDPG(MADDPG):
     ''' This is a version of MADDPG where there is no centralized training. 
     Each critic only observes its own observation, not the entire state.
     '''
-    def __init__(self, num_agents, observation_space, action_space, optimizer, loss_func, gamma, tau, 
+    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, loss_func, gamma, tau, 
                  discrete=True, regularization=False, normalized_rewards=False, dtype=K.float32, device="cuda"):
         
-        super().__init__(num_agents, observation_space, action_space, optimizer, loss_func, gamma, tau, 
+        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, loss_func, gamma, tau, 
                          discrete, regularization, normalized_rewards, dtype, device)
 
         optimizer, lr = optimizer
         _, critic_lr = lr
+
+        # model initialization
+        self.entities = []
+
+        # actors
+        self.entities.extend(self.actors)
+        self.entities.extend(self.actors_target)
+        self.entities.extend(self.actors_optim)
         
         # critics   
         self.critics = []
@@ -144,6 +183,13 @@ class MADDPG_NC(MADDPG):
             self.critics.append(Critic(observation_space, action_space).to(device))
             self.critics_target.append(Critic(observation_space, action_space).to(device))
             self.critics_optim.append(optimizer(self.critics[i].parameters(), lr = critic_lr))
+
+        for i in range(num_agents):
+            hard_update(self.critics_target[i], self.critics[i])
+
+        self.entities.extend(self.critics)
+        self.entities.extend(self.critics_target)
+        self.entities.extend(self.critics_optim)
 
     def update_parameters(self, batch, i_agent):
         
@@ -197,7 +243,7 @@ class MACDDPG(MADDPG):
     def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, loss_func, gamma, tau, 
                  discrete=True, regularization=False, normalized_rewards=False, dtype=K.float32, device="cuda"):
         
-        super().__init__(num_agents, observation_space, action_space, optimizer, loss_func, gamma, tau, 
+        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, loss_func, gamma, tau, 
                          discrete, regularization, normalized_rewards, dtype, device)
 
         optimizer, lr = optimizer
@@ -212,9 +258,11 @@ class MACDDPG(MADDPG):
         self.normalized_rewards = normalized_rewards
         self.dtype = dtype
         self.device = device
+        self.has_communication = True
 
         # model initialization
-        
+        self.entities = []
+
         # actors
         self.actors = []
         self.actors_target = []
@@ -227,6 +275,10 @@ class MACDDPG(MADDPG):
             
         for i in range(num_agents):
             hard_update(self.actors_target[i], self.actors[i])
+
+        self.entities.extend(self.actors)
+        self.entities.extend(self.actors_target)
+        self.entities.extend(self.actors_optim) 
         
         # critics   
         self.critics = []
@@ -239,7 +291,11 @@ class MACDDPG(MADDPG):
             self.critics_optim.append(optimizer(self.critics[i].parameters(), lr = critic_lr))
 
         for i in range(num_agents):
-            hard_update(self.critics_target[i], self.critics[i]) 
+            hard_update(self.critics_target[i], self.critics[i])
+            
+        self.entities.extend(self.critics)
+        self.entities.extend(self.critics_target)
+        self.entities.extend(self.critics_optim)    
 
         # communication actors
         self.comm_actors = []
@@ -254,6 +310,10 @@ class MACDDPG(MADDPG):
         for i in range(num_agents):
             hard_update(self.comm_actors_target[i], self.comm_actors[i])
 
+        self.entities.extend(self.comm_actors)
+        self.entities.extend(self.comm_actors_target)
+        self.entities.extend(self.comm_actors_optim)
+
         # communication critics   
         self.comm_critics = []
         self.comm_critics_target = []
@@ -265,16 +325,18 @@ class MACDDPG(MADDPG):
             self.comm_critics_optim.append(optimizer(self.comm_critics[i].parameters(), lr = critic_lr))
 
         for i in range(num_agents):
-            hard_update(self.comm_critics_target[i], self.comm_critics[i]) 
+            hard_update(self.comm_critics_target[i], self.comm_critics[i])
 
-
+        self.entities.extend(self.comm_critics)
+        self.entities.extend(self.comm_critics_target)
+        self.entities.extend(self.comm_critics_optim)
+    
     def select_comm_action(self, state, i_agent, exploration=False):
         with K.no_grad():
             mu = self.comm_actors[i_agent](state.to(self.device))
             if exploration:
                 mu += K.tensor(exploration.noise(), dtype=self.dtype, device=self.device)
         return mu.clamp(0, 1) 
-
 
     def update_parameters(self, batch, i_agent):
         
