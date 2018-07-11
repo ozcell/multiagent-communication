@@ -14,8 +14,6 @@ from macomm.experience import ReplayMemory, ReplayMemoryComm, Transition, Transi
 from macomm.exploration import OUNoise
 from macomm.utils import Saver, Summarizer, get_noise_scale, get_params, running_mean
 
-#from madrl_environments.pursuit import MAWaterWorld_mod
-
 import pdb
 
 
@@ -63,6 +61,7 @@ def init(config):
     CONS_LIM = config['consecuitive_limit'] # 5
 
     if ENV_NAME == 'waterworld':
+        from madrl_environments.pursuit import MAWaterWorld_mod
         env = MAWaterWorld_mod(n_pursuers=2, 
                            n_evaders=50,
                            n_poison=50, 
