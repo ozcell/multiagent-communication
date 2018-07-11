@@ -34,7 +34,7 @@ class Critic(nn.Module):
     
 class Actor(nn.Module):
 
-    def __init__(self, observation_space, action_space, discrete=True):
+    def __init__(self, observation_space, action_space, discrete=True, out_func=F.sigmoid):
         super(Actor, self).__init__()
         
         input_size = observation_space
@@ -42,6 +42,7 @@ class Actor(nn.Module):
         output_size = action_space
 
         self.discrete = discrete
+        self.out_func = out_func
         
         BN = nn.BatchNorm1d(input_size)
         BN.weight.data.fill_(1)
@@ -60,7 +61,7 @@ class Actor(nn.Module):
         if self.discrete:
             x = F.softmax(self.FC(x), dim=1)
         else:
-            x = F.tanh(self.FC(x))
+            x = self.out_func(self.FC(x))
         return x
 
     def get_preactivations(self, s):

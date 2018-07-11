@@ -122,7 +122,7 @@ def get_params(args=[], verbose=False):
                         help="discount factor")
     parser.add_argument("--agent_alg",
                         default="MACDDPG", type=str,
-                        choices=['MACDDPG', 'MADDPG', 'DDPG'])
+                        choices=['MACDDPG', 'MADDPG', 'DDPG', 'ORACLE'])
     parser.add_argument("--device", default='cuda',
                         choices=['cpu','cuda'], 
                         help="device type")
@@ -142,7 +142,7 @@ def get_params(args=[], verbose=False):
     #                             'memory_water'], help="agent type")
 
     parser.add_argument("--agent_type", default='basic',
-                        choices=['basic', 'developed'], help="agent type")
+                        choices=['basic', 'deep'], help="agent type")
 
     # path arguments
     parser.add_argument('--exp_id', default='no_id',
@@ -172,6 +172,9 @@ def get_params(args=[], verbose=False):
     parser.add_argument("--reward_normalization", default="True",
                         choices=['True', 'False'],
                         help="Normalizing the rewards")
+
+    parser.add_argument('--verbose', default=1, type=int,\
+                         help='monitoring level')
 
 
     # acquire in a dict

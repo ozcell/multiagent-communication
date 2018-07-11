@@ -8,13 +8,13 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from macomm.algorithms import MADDPG, MACDDPG, DDPG
+from macomm.algorithms import MADDPG, MACDDPG, DDPG, ORACLE
 from macomm.environments import communication, make_env_cont
 from macomm.experience import ReplayMemory, ReplayMemoryComm, Transition, Transition_Comm
 from macomm.exploration import OUNoise
 from macomm.utils import Saver, Summarizer, get_noise_scale, get_params, running_mean
 
-from madrl_environments.pursuit import MAWaterWorld_mod
+#from madrl_environments.pursuit import MAWaterWorld_mod
 
 import pdb
 
@@ -91,8 +91,10 @@ def init(config):
     medium_space = observation_space + 1
     if ENV_NAME == 'waterworld':
         action_space = env.action_space[0]
+        OUT_FUNC = F.tanh
     else:
         action_space = env.action_space[0].n
+        OUT_FUNC = F.sigmoid
 
     env.seed(SEED)
     K.manual_seed(SEED)
@@ -109,18 +111,24 @@ def init(config):
     elif config['agent_alg'] == 'DDPG':
         MODEL = DDPG
         comm_env = None
+    elif config['agent_alg'] == 'ORACLE':
+        MODEL = ORACLE
+        comm_env = None
 
     if config['agent_type'] == 'basic':
         from macomm.agents.basic import Actor, Critic
     elif config['agent_type'] == 'deep':
         from macomm.agents.deep import Actor, Critic
     
-    # utils
-    summaries = (Summarizer(config['dir_summary_train'], config['port'], config['resume']),
-                 Summarizer(config['dir_summary_test'], config['port'], config['resume']))
-                 
-    
-    saver = Saver(config)
+    if config['verbose'] > 1:
+        # utils
+        summaries = (Summarizer(config['dir_summary_train'], config['port'], config['resume']),
+                    Summarizer(config['dir_summary_test'], config['port'], config['resume']))
+        saver = Saver(config)
+    else:
+        summaries = None
+        saver = None
+
 
     #exploration initialization
     ounoise = OUNoise(action_space)
@@ -130,7 +138,7 @@ def init(config):
     optimizer = (optim.Adam, (ACTOR_LR, CRITIC_LR)) # optimiser func, (actor_lr, critic_lr)
     loss_func = F.mse_loss
     model = MODEL(num_agents, observation_space, action_space, medium_space, optimizer, 
-                  Actor, Critic, loss_func, GAMMA, TAU, 
+                  Actor, Critic, loss_func, GAMMA, TAU, out_func=OUT_FUNC,
                   discrete=DISCRETE, regularization=REGULARIZATION, normalized_rewards=NORMALIZED_REWARDS, 
                   communication=comm_env
                   )
@@ -204,12 +212,18 @@ def run(model, experiment_args, train=True):
                     if model.communication is not None:
                         action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, train)
                     else:
-                        action = model.select_action(observations[[i], ], i, train)
+                        if config['agent_alg'] == 'ORACLE':
+                            action = model.select_action(observations, i, train)
+                        else:
+                            action = model.select_action(observations[[i], ], i, train)
                 else:
                     if model.communication is not None:
                         action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, ounoise if train else False)
                     else:
-                        action = model.select_action(observations[[i], ], i, ounoise if train else False)
+                        if config['agent_alg'] == 'ORACLE':
+                            action = model.select_action(observations, i, ounoise if train else False)
+                        else:
+                            action = model.select_action(observations[[i], ], i, ounoise if train else False)
                 actions.append(action)
             actions = K.stack(actions).cpu()
 
@@ -260,62 +274,69 @@ def run(model, experiment_args, train=True):
         # <-- end loop: i_step 
         
         ### MONITORIRNG ###
-        
-        # Printing out
+
         episode_rewards_all.append(episode_rewards.sum())
         episode_comm_rewards_all.append(episode_comm_rewards.sum())
-        if (i_episode+1)%100 == 0:
-            print("==> Episode {} of {}".format(i_episode + 1, NUM_EPISODES))
-            print('  | Id exp: {}'.format(config['exp_id']))
-            print('  | Exp description: {}'.format(config['exp_descr']))
-            print('  | Env: {}'.format(config['env_id']))
-            print('  | Process pid: {}'.format(config['process_pid']))
-            print('  | Tensorboard port: {}'.format(config['port']))
-            print('  | Episode total reward: {}'.format(episode_rewards.sum()))
-            print('  | Running mean of total reward: {}'.format(running_mean(episode_rewards_all)[-1]))
-            print('  | Running mean of total comm_reward: {}'.format(running_mean(episode_comm_rewards_all)[-1]))
-            print('  | Time episode: {}'.format(time.time()-episode_time_start))
-            print('  | Time total: {}'.format(time.time()-total_time_start))
+        if config['verbose'] > 0:
+        # Printing out
+            if (i_episode+1)%100 == 0:
+                print("==> Episode {} of {}".format(i_episode + 1, NUM_EPISODES))
+                print('  | Id exp: {}'.format(config['exp_id']))
+                print('  | Exp description: {}'.format(config['exp_descr']))
+                print('  | Env: {}'.format(config['env_id']))
+                print('  | Process pid: {}'.format(config['process_pid']))
+                print('  | Tensorboard port: {}'.format(config['port']))
+                print('  | Episode total reward: {}'.format(episode_rewards.sum()))
+                print('  | Running mean of total reward: {}'.format(running_mean(episode_rewards_all)[-1]))
+                print('  | Running mean of total comm_reward: {}'.format(running_mean(episode_comm_rewards_all)[-1]))
+                print('  | Time episode: {}'.format(time.time()-episode_time_start))
+                print('  | Time total: {}'.format(time.time()-total_time_start))
             
-        # Best reward so far?
-        if episode_rewards.sum() >= reward_best:
-            reward_best = episode_rewards.sum()
-            is_best = True
-        else:
-            is_best = False
-        # Best average reward so far?
-        if (i_episode > 100) and running_mean(episode_rewards_all)[-1] > avg_reward_best:
-            avg_reward_best = running_mean(episode_rewards_all)[-1]
-            is_best_avg = True 
-        else:
-            is_best_avg = False
-                    
-        # Update logs and save model                     
-        ep_save = i_episode+1 if (i_episode % config['save_epochs'] == 0 or i_episode == config['n_episodes']-1) else None
-        is_best_save = reward_best if is_best else None
-        is_best_avg_save = avg_reward_best if is_best_avg else None   
+        if config['verbose'] > 1:
+            # Best reward so far?
+            if episode_rewards.sum() >= reward_best:
+                reward_best = episode_rewards.sum()
+                is_best = True
+            else:
+                is_best = False
+            # Best average reward so far?
+            if (i_episode > 100) and running_mean(episode_rewards_all)[-1] > avg_reward_best:
+                avg_reward_best = running_mean(episode_rewards_all)[-1]
+                is_best_avg = True 
+            else:
+                is_best_avg = False
+                        
+        if config['verbose'] > 0:    
+            # Update logs and save model
+            #ep_save = i_episode+1 if (i_episode % config['save_epochs'] == 0 or i_episode == NUM_EPISODES-1) else None
+            #is_best_save = reward_best if is_best else None
+            #is_best_avg_save = avg_reward_best if is_best_avg else None   
+            ep_save = i_episode+1 if (i_episode == NUM_EPISODES-1) else None  
+            is_best_save = None
+            is_best_avg_save = None   
+                
+            if (not train) or ((np.asarray([ep_save, is_best_save, is_best_avg_save]) == None).sum() == 3):
+                to_save = False
+            else:
+                model.to_cpu()
+                saver.save_checkpoint(save_dict   = {'model_params': [entity.state_dict() for entity in model.entities]},
+                                      episode     = ep_save,
+                                      is_best     = is_best_save,
+                                      is_best_avg = is_best_avg_save
+                                      )
+                to_save = True
             
-        if (not train) or ((np.asarray([ep_save, is_best_save, is_best_avg_save]) == None).sum() == 3):
-            to_save = False
-        else:
-            model.to_cpu()
-            saver.save_checkpoint(save_dict   = {'model_params': [entity.state_dict() for entity in model.entities]},
-                                  episode     = ep_save,
-                                  is_best     = is_best_save,
-                                  is_best_avg = is_best_avg_save
-                                  )
-            to_save = True
-        
-        summary = summaries[0] if train else summaries[1]
-        summary.update_log(i_episode, 
-                           episode_rewards.sum(), 
-                           list(episode_rewards.reshape(-1,)), 
-                           critic_loss = critic_losses, 
-                           actor_loss = actor_losses,
-                           to_save = to_save, 
-                           comm_reward_total = episode_comm_rewards.sum(),
-                           comm_reward_agents = list(episode_comm_rewards.reshape(-1,))
-                          )
+            #if (np.asarray([ep_save, is_best_save, is_best_avg_save]) == None).sum() != 3:
+            summary = summaries[0] if train else summaries[1]
+            summary.update_log(i_episode, 
+                               episode_rewards.sum(), 
+                               list(episode_rewards.reshape(-1,)), 
+                               critic_loss        = critic_losses, 
+                               actor_loss         = actor_losses,
+                               to_save            = to_save, 
+                               comm_reward_total  = episode_comm_rewards.sum(),
+                               comm_reward_agents = list(episode_comm_rewards.reshape(-1,))
+                               )
         
 
         # Save gif
@@ -342,8 +363,8 @@ if __name__ == '__main__':
     env, comm_env, memory, ounoise, comm_ounoise, config, summaries, saver, start_episode = experiment_args
     
     tic = time.time()
-    monitor = run(model, args, train=True)
-    monitor_test = run(model, args, train=False)
+    monitor = run(model, experiment_args, train=True)
+    monitor_test = run(model, experiment_args, train=False)
     
     toc = time.time()
     
