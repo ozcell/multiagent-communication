@@ -327,16 +327,18 @@ def run(model, experiment_args, train=True):
                 to_save = True
             
             #if (np.asarray([ep_save, is_best_save, is_best_avg_save]) == None).sum() != 3:
-            summary = summaries[0] if train else summaries[1]
-            summary.update_log(i_episode, 
-                               episode_rewards.sum(), 
-                               list(episode_rewards.reshape(-1,)), 
-                               critic_loss        = critic_losses, 
-                               actor_loss         = actor_losses,
-                               to_save            = to_save, 
-                               comm_reward_total  = episode_comm_rewards.sum(),
-                               comm_reward_agents = list(episode_comm_rewards.reshape(-1,))
-                               )
+    
+            if (i_episode+1)%100 == 0:
+                summary = summaries[0] if train else summaries[1]
+                summary.update_log(i_episode, 
+                                episode_rewards.sum(), 
+                                list(episode_rewards.reshape(-1,)), 
+                                critic_loss        = critic_losses, 
+                                actor_loss         = actor_losses,
+                                to_save            = to_save, 
+                                comm_reward_total  = episode_comm_rewards.sum(),
+                                comm_reward_agents = list(episode_comm_rewards.reshape(-1,))
+                                )
         
 
         # Save gif
