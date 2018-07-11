@@ -416,10 +416,12 @@ class MACDDPG(MADDPG):
         self.entities.extend(self.comm_critics_optim)
     
     def select_comm_action(self, state, i_agent, exploration=False):
+        self.comm_actors[i_agent].eval()
         with K.no_grad():
             mu = self.comm_actors[i_agent](state.to(self.device))
-            if exploration:
-                mu += K.tensor(exploration.noise(), dtype=self.dtype, device=self.device)
+        self.comm_actors[i_agent].train()
+        if exploration:
+            mu += K.tensor(exploration.noise(), dtype=self.dtype, device=self.device)
         return mu.clamp(0, 1) 
 
     def update_parameters(self, batch, i_agent):
