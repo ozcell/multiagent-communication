@@ -358,19 +358,77 @@ def run(model, experiment_args, train=True):
 
 if __name__ == '__main__':
 
-    config = get_params(args=['--exp_id','wtf', '--agent_alg', 'MACDDPG'])
-    model, experiment_args = init(config)
-    
-    env, comm_env, memory, ounoise, comm_ounoise, config, summaries, saver, start_episode = experiment_args
-    
-    tic = time.time()
-    monitor = run(model, experiment_args, train=True)
-    monitor_test = run(model, experiment_args, train=False)
-    
-    toc = time.time()
-    
-    env.close()
-    for summary in summaries:
-        summary.close()
-    
-    print(toc-tic)
+    monitor_macddpg_p2 = []
+    monitor_macddpg_p2_test = []
+    for i in range(0,5):
+        config = get_params(args=['--exp_id','MACDDPG_P2_120K_'+ str(i+1), 
+                                '--random_seed', str(i+1), 
+                                '--agent_alg', 'MACDDPG',
+                                '--protocol_type', str(2),
+                                '--n_episodes', '120000',
+                                '--verbose', '2',
+                                ]
+                        )
+        model, experiment_args = init(config)
+
+        env, comm_env, memory, ounoise, comm_ounoise, config, summaries, saver, start_episode = experiment_args
+
+        tic = time.time()
+        monitor = run(model, experiment_args, train=True)
+        monitor_test = run(model, experiment_args, train=False)
+
+        toc = time.time()
+
+        env.close()
+        for summary in summaries:
+            summary.close()
+            
+        monitor_macddpg_p2.append(monitor)
+        monitor_macddpg_p2_test.append(monitor_test)
+        
+        np.save('./monitor_macddpg_p2.npy', monitor_macddpg_p2)
+        np.save('./monitor_macddpg_p2_test.npy', monitor_macddpg_p2_test)
+        
+        print(toc-tic)
+
+    # monitor_all = []
+    # monitor_test_all = []
+    # for i in range(1,2):
+    #     config = get_params(args=['--env_id', 'waterworld', 
+    #                             '--exp_id','waterworld_MACDDPG_DEEP_'+ str(i+1), 
+    #                             '--random_seed', str(i+1), 
+    #                             '--agent_alg', 'MACDDPG',
+    #                             '--n_episodes', '20000',
+    #                             '--episode_length', '200',
+    #                             '--buffer_length','100000',
+    #                             '--plcy_lr', '0.0001',
+    #                             '--crtc_lr', '0.001',
+    #                             '--protocol_type', str(2),
+    #                             '--agent_type', 'deep',
+    #                             '--render', '500', 
+    #                             '--verbose', '2'
+    #                             ])
+    #     model, experiment_args = init(config)
+
+    #     env, comm_env, memory, ounoise, comm_ounoise, config, summaries, saver, start_episode = experiment_args
+
+    #     tic = time.time()
+    #     monitor = run(model, experiment_args, train=True)
+    #     monitor_test = run(model, experiment_args, train=False)
+
+    #     toc = time.time()
+
+    #     env.close()
+    #     for summary in summaries:
+    #         summary.close()
+            
+    #     monitor_all.append(monitor)
+    #     monitor_test_all.append(monitor_test)
+        
+    #     np.save('./monitor_all_waterworld_macddpg_p2_deep.npy', monitor_all)
+    #     np.save('./monitor_test_all_waterworld_macddpg_p2_deep.npy', monitor_test_all)
+        
+    #     print(toc-tic)
+
+
+        
