@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 from macomm.algorithms import MADDPG, MACDDPG, DDPG, ORACLE
 from macomm.environments import communication, make_env_cont
-from macomm.experience import ReplayMemory, ReplayMemoryComm, Transition, Transition_Comm
+from macomm.experience import ReplayMemory, ReplayMemoryComm, Transition, Transition_Comm, ReplayMemoryCommLstm, Transition_Comm_Lstm
 from macomm.exploration import OUNoise
 from macomm.utils import Saver, Summarizer, get_noise_scale, get_params, running_mean
 
@@ -118,6 +118,16 @@ def init(config):
         from macomm.agents.basic import Actor, Critic
     elif config['agent_type'] == 'deep':
         from macomm.agents.deep import Actor, Critic
+    elif config['agent_type'] == 'lstm':
+        from macomm.agents.lstm import Actor, Critic
+
+    if config['comm_agent_type'] == 'basic':
+        from macomm.agents.basic import Actor as Comm_Actor, Critic as Comm_Critic
+    elif config['comm_agent_type']  == 'deep':
+        from macomm.agents.deep import Actor as Comm_Actor, Critic as Comm_Critic
+    elif config['comm_agent_type'] == 'lstm':
+        from macomm.agents.lstm import Actor as Comm_Actor, Critic as Comm_Critic
+
     
     if config['verbose'] > 1:
         # utils
@@ -139,7 +149,7 @@ def init(config):
     model = MODEL(num_agents, observation_space, action_space, medium_space, optimizer, 
                   Actor, Critic, loss_func, GAMMA, TAU, out_func=OUT_FUNC,
                   discrete=DISCRETE, regularization=REGULARIZATION, normalized_rewards=NORMALIZED_REWARDS, 
-                  communication=comm_env
+                  communication=comm_env, Comm_Actor=Comm_Actor, Comm_Critic=Comm_Critic
                   )
     
     if config['resume'] != '':
@@ -148,7 +158,10 @@ def init(config):
     
     #memory initilization
     if model.communication is not None:
-        memory = ReplayMemoryComm(MEM_SIZE)
+        if config['comm_agent_type'] == 'lstm':
+            memory = ReplayMemoryCommLstm(MEM_SIZE)
+        else:
+            memory = ReplayMemoryComm(MEM_SIZE)
     else:
         memory = ReplayMemory(MEM_SIZE)
         
@@ -189,16 +202,35 @@ def run(model, experiment_args, train=True):
         ounoise.scale = get_noise_scale(i_episode, config)
         comm_ounoise.scale = get_noise_scale(i_episode, config)
 
+        if model.communication is not None and config['comm_agent_type'] == 'lstm':
+            for i in range(model.num_agents):
+                model.comm_actors[i].init()
+
         for i_step in range(config['episode_length']):
 
             model.to_cpu()
             
             if model.communication is not None:
+                comm_contexts = []
+                next_comm_contexts = []
                 comm_actions = []
-                for i in range(model.num_agents): 
+
+                for i in range(model.num_agents):
+                    if config['comm_agent_type'] == 'lstm':
+                        comm_context = model.comm_actors[i].get_h()
+                        comm_contexts.append(comm_context)
+
                     comm_action = model.select_comm_action(observations[[i], ], i, comm_ounoise if train else False)
                     comm_actions.append(comm_action)
+
+                    if config['comm_agent_type'] == 'lstm':
+                        next_comm_context = model.comm_actors[i].get_h()
+                        next_comm_contexts.append(next_comm_context)
+
                 comm_actions = K.stack(comm_actions).cpu()
+                if config['comm_agent_type'] == 'lstm':
+                    comm_contexts = K.stack(comm_contexts).cpu()
+                    next_comm_contexts = K.stack(next_comm_contexts).cpu()
 
                 medium, comm_rewards = comm_env.step(observations, comm_actions)
                 medium = K.tensor(medium, dtype=K.float32)
@@ -234,11 +266,15 @@ def run(model, experiment_args, train=True):
             # if it is the last step we don't need next obs
             if i_step == config['episode_length']-1:
                 next_observations = None
+                next_comm_contexts = None
 
             # Store the transition in memory
             if train:
                 if model.communication is not None:
-                    memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards)
+                    if config['comm_agent_type'] == 'lstm':
+                        memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, comm_contexts, next_comm_contexts)
+                    else:
+                        memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards)
                 else:
                     memory.push(observations, actions, next_observations, rewards)
 
@@ -255,7 +291,10 @@ def run(model, experiment_args, train=True):
                     actor_losses = []                  
                     for i in range(env.n):
                         if model.communication is not None:
-                            batch = Transition_Comm(*zip(*memory.sample(config['batch_size'])))
+                            if config['comm_agent_type'] == 'lstm': 
+                                batch = Transition_Comm_Lstm(*zip(*memory.sample(config['batch_size'])))
+                            else:
+                                batch = Transition_Comm(*zip(*memory.sample(config['batch_size'])))
                         else:
                             batch = Transition(*zip(*memory.sample(config['batch_size'])))
                         model.to_cuda()
@@ -268,7 +307,7 @@ def run(model, experiment_args, train=True):
                 if config['env_id'] == 'waterworld':
                     frames.append(sc.misc.imresize(env.render(), (300, 300)))
                 else:
-                    frames.append(env.render(mode='rgb_array'))  
+                    frames.append(env.render(mode='rgb_array')[0])  
 
         # <-- end loop: i_step 
         

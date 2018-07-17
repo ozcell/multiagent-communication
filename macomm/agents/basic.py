@@ -10,6 +10,8 @@ class Critic(nn.Module):
         input_size = observation_space + action_space
         hidden_size = 128
         output_size = 1
+
+        self.has_context = False
         
         self.FC = nn.Sequential(nn.Linear(input_size, hidden_size), nn.ReLU(True),
                                 nn.Linear(hidden_size, hidden_size), nn.ReLU(True),
@@ -37,6 +39,7 @@ class Actor(nn.Module):
 
         self.discrete = discrete
         self.out_func = out_func
+        self.has_context = False
         
         self.FC = nn.Sequential(nn.Linear(input_size, hidden_size), nn.ReLU(True),
                                 nn.Linear(hidden_size, hidden_size), nn.ReLU(True),

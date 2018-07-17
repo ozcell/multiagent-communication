@@ -11,6 +11,8 @@ class Critic(nn.Module):
         #hidden_size = 128
         output_size = 1
 
+        self.has_context = False
+
         BN = nn.BatchNorm1d(input_size)
         BN.weight.data.fill_(1)
         BN.bias.data.fill_(0)
@@ -43,6 +45,7 @@ class Actor(nn.Module):
 
         self.discrete = discrete
         self.out_func = out_func
+        self.has_context = False
         
         BN = nn.BatchNorm1d(input_size)
         BN.weight.data.fill_(1)

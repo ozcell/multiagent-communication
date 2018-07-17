@@ -142,8 +142,9 @@ def get_params(args=[], verbose=False):
     #                             'memory_water'], help="agent type")
 
     parser.add_argument("--agent_type", default='basic',
-                        choices=['basic', 'deep'], help="agent type")
-
+                        choices=['basic', 'deep', 'lstm'], help="agent type")
+    parser.add_argument("--comm_agent_type", default='basic',
+                        choices=['basic', 'deep', 'lstm'], help="communication agent type")
     # path arguments
     parser.add_argument('--exp_id', default='no_id',
                         help='experiment ID')

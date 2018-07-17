@@ -20,7 +20,7 @@ def hard_update(target, source):
 class MADDPG(object):
     
     def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func=F.sigmoid,
-                 discrete=True, regularization=False, normalized_rewards=False, communication=None, dtype=K.float32, device="cuda"):
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, Comm_Actor=None, Comm_Critic=None, dtype=K.float32, device="cuda"):
         
         optimizer, lr = optimizer
         actor_lr, critic_lr = lr
@@ -156,10 +156,10 @@ class MADDPG(object):
 
 class ORACLE(MADDPG):
     def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func=F.sigmoid,
-                 discrete=True, regularization=False, normalized_rewards=False, communication=None, dtype=K.float32, device="cuda"):
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, Comm_Actor=None, Comm_Critic=None, dtype=K.float32, device="cuda"):
 
         super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func,
-                         discrete, regularization, normalized_rewards, communication, dtype, device)
+                         discrete, regularization, normalized_rewards, communication, Comm_Actor, Comm_Critic, dtype, device)
 
         optimizer, lr = optimizer
         actor_lr, _ = lr
@@ -242,10 +242,10 @@ class DDPG(MADDPG):
     Each critic only observes its own observation, not the entire state.
     '''
     def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func=F.sigmoid,
-                 discrete=True, regularization=False, normalized_rewards=False, communication=None, dtype=K.float32, device="cuda"):
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, Comm_Actor=None, Comm_Critic=None, dtype=K.float32, device="cuda"):
         
         super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func,
-                         discrete, regularization, normalized_rewards, communication, dtype, device)
+                         discrete, regularization, normalized_rewards, communication, Comm_Actor, Comm_Critic, dtype, device)
 
         optimizer, lr = optimizer
         _, critic_lr = lr
@@ -325,10 +325,10 @@ class DDPG(MADDPG):
 
 class MACDDPG(MADDPG):
     def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func=F.sigmoid,
-                 discrete=True, regularization=False, normalized_rewards=False, communication=None, dtype=K.float32, device="cuda"):
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, Comm_Actor=None, Comm_Critic=None, dtype=K.float32, device="cuda"):
         
-        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau,  out_func,
-                         discrete, regularization, normalized_rewards, communication, dtype, device)
+        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func,
+                         discrete, regularization, normalized_rewards, communication, Comm_Actor, Comm_Critic, dtype, device)
 
         optimizer, lr = optimizer
         actor_lr, critic_lr = lr
@@ -387,8 +387,8 @@ class MACDDPG(MADDPG):
         self.comm_actors_optim = []
         
         for i in range(num_agents):
-            self.comm_actors.append(Actor(observation_space, 1, discrete, F.sigmoid).to(device))
-            self.comm_actors_target.append(Actor(observation_space, 1, discrete, F.sigmoid).to(device))
+            self.comm_actors.append(Comm_Actor(observation_space, 1, discrete, F.sigmoid).to(device))
+            self.comm_actors_target.append(Comm_Actor(observation_space, 1, discrete, F.sigmoid).to(device))
             self.comm_actors_optim.append(optimizer(self.comm_actors[i].parameters(), lr = actor_lr))
             
         for i in range(num_agents):
@@ -404,8 +404,8 @@ class MACDDPG(MADDPG):
         self.comm_critics_optim = []
         
         for i in range(num_agents):
-            self.comm_critics.append(Critic(observation_space*num_agents, 1*num_agents).to(device))
-            self.comm_critics_target.append(Critic(observation_space*num_agents, 1*num_agents).to(device))
+            self.comm_critics.append(Comm_Critic(observation_space*num_agents, 1*num_agents).to(device))
+            self.comm_critics_target.append(Comm_Critic(observation_space*num_agents, 1*num_agents).to(device))
             self.comm_critics_optim.append(optimizer(self.comm_critics[i].parameters(), lr = critic_lr))
 
         for i in range(num_agents):
@@ -444,20 +444,35 @@ class MACDDPG(MADDPG):
         m_ = K.zeros_like(m)[:,0:s_.shape[1],]
         c_ = K.zeros_like(c)[:,0:s_.shape[1],]
 
+        if self.comm_actors[0].has_context:
+            h = K.cat(batch.comm_context, dim=1).to(self.device)
+            h_ = K.cat([i.to(self.device) for i in batch.next_comm_context if i is not None], dim=1)
+
         if self.normalized_rewards:
             r -= r.mean()
             r /= r.std()
             t -= t.mean()
             t /= t.std()
 
-        R = self.comm_critics[i_agent](s, c)
+        if self.comm_actors[0].has_context:
+            R = self.comm_critics[i_agent](s, c, h)
+        else:
+            R = self.comm_critics[i_agent](s, c)
 
         for i in range(self.num_agents):
-            c_[i,] = self.comm_actors_target[i](s_[[i],])
+            if self.comm_actors[0].has_context:
+                c_[i,] = self.comm_actors_target[i](s_[[i],], h_[[i],])
+            else:
+                c_[i,] = self.comm_actors_target[i](s_[[i],])
 
-        W[mask] = self.comm_critics_target[i_agent](s_, c_).detach()
+        
+        if self.comm_actors[0].has_context:
+            W[mask] = self.comm_critics_target[i_agent](s_, c_, h_).detach()
+        else:
+            W[mask] = self.comm_critics_target[i_agent](s_, c_).detach()
         
         loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0) + r[[i_agent],].squeeze(0))
+        #loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0))
 
         self.comm_critics_optim[i_agent].zero_grad()
         loss_comm_critic.backward()
@@ -465,11 +480,20 @@ class MACDDPG(MADDPG):
         self.comm_critics_optim[i_agent].step()
 
         for i in range(self.num_agents):
-            c[i,] = self.comm_actors[i](s[[i],])
+            if self.comm_actors[0].has_context:
+                c[i,] = self.comm_actors[i](s[[i],], h[[i],])
+            else:
+                c[i,] = self.comm_actors[i](s[[i],])
 
-        loss_comm_actor = -self.comm_critics[i_agent](s, c).mean()
-        if self.regularization:
-            loss_comm_actor += (self.comm_actors[i_agent].get_preactivations(s[[i_agent],])**2).mean()*1e-3
+        
+        if self.comm_actors[0].has_context:
+            loss_comm_actor = -self.comm_critics[i_agent](s, c, h).mean()
+            if self.regularization:
+                loss_comm_actor += (self.comm_actors[i_agent].get_preactivations(s[[i_agent],], h[[i_agent],])**2).mean()*1e-3
+        else:
+            loss_comm_actor = -self.comm_critics[i_agent](s, c).mean()
+            if self.regularization:
+                loss_comm_actor += (self.comm_actors[i_agent].get_preactivations(s[[i_agent],])**2).mean()*1e-3
 
         self.comm_actors_optim[i_agent].zero_grad()        
         loss_comm_actor.backward()
