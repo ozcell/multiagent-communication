@@ -100,6 +100,8 @@ def get_params(args=[], verbose=False):
                         help="number of episodes")
     parser.add_argument("--episode_length", default=25, type=int,
                         help="number of steps for episode")
+    parser.add_argument("--episode_length_test", default=25, type=int,
+                        help="number of steps for episode")
     parser.add_argument("--steps_per_update", default=100, type=int,
                         help="target networks update frequency")
     parser.add_argument("--batch_size", default=1024, type=int,
@@ -122,7 +124,7 @@ def get_params(args=[], verbose=False):
                         help="discount factor")
     parser.add_argument("--agent_alg",
                         default="MACDDPG", type=str,
-                        choices=['MACDDPG', 'MADDPG', 'DDPG', 'ORACLE'])
+                        choices=['MACDDPG', 'MADDPG', 'DDPG', 'ORACLE', 'MACCDDPG', 'MADCDDPG', 'MSDDPG'])
     parser.add_argument("--device", default='cuda',
                         choices=['cpu','cuda'], 
                         help="device type")
@@ -173,6 +175,14 @@ def get_params(args=[], verbose=False):
     parser.add_argument("--reward_normalization", default="True",
                         choices=['True', 'False'],
                         help="Normalizing the rewards")
+
+    parser.add_argument("--exploration",
+                        default="NORMAL", type=str,
+                        choices=['NORMAL', 'EOBO'])
+
+    parser.add_argument("--medium_type",
+                        default="obs_only", type=str,
+                        choices=['obs_only', 'obs_act'])
 
     parser.add_argument('--verbose', default=1, type=int,\
                          help='monitoring level')

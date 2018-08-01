@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from macomm.algorithms import MADDPG, MACDDPG, DDPG, ORACLE
+from macomm.algorithms import MADDPG, MACDDPG, DDPG, ORACLE, MACCDDPG, MADCDDPG, MSDDPG
 from macomm.environments import communication, make_env_cont
 from macomm.experience import ReplayMemory, ReplayMemoryComm, Transition, Transition_Comm, ReplayMemoryCommLstm, Transition_Comm_Lstm
 from macomm.exploration import OUNoise
@@ -87,13 +87,24 @@ def init(config):
 
     num_agents = env.n
     observation_space = env.observation_space[0].shape[0]
-    medium_space = observation_space + 1
+
     if ENV_NAME == 'waterworld':
         action_space = env.action_space[0]
         OUT_FUNC = F.tanh
     else:
         action_space = env.action_space[0].n
         OUT_FUNC = F.sigmoid
+
+    if config['agent_alg'] == 'MSDDPG':
+        if config['medium_type'] == 'obs_only':
+            medium_space = observation_space
+        elif config['medium_type'] == 'obs_act':
+            medium_space = observation_space + action_space        
+    else:
+        if config['medium_type'] == 'obs_only':
+            medium_space = observation_space + 1
+        elif config['medium_type'] == 'obs_act':
+            medium_space = observation_space + action_space + 1
 
     env.seed(SEED)
     K.manual_seed(SEED)
@@ -103,7 +114,20 @@ def init(config):
         MODEL = MACDDPG
         comm_env = communication(protocol_type=PROTOCOL, 
                                  consecuitive_limit=CONS_LIM, 
-                                 num_agents=num_agents)
+                                 num_agents=num_agents,
+                                 medium_type=config['medium_type'])
+    elif config['agent_alg'] == 'MACCDDPG':
+        MODEL = MACCDDPG
+        comm_env = communication(protocol_type=PROTOCOL, 
+                                 consecuitive_limit=CONS_LIM, 
+                                 num_agents=num_agents,
+                                 medium_type=config['medium_type'])
+    elif config['agent_alg'] == 'MADCDDPG':
+        MODEL = MADCDDPG
+        comm_env = communication(protocol_type=PROTOCOL, 
+                                 consecuitive_limit=CONS_LIM, 
+                                 num_agents=num_agents,
+                                 medium_type=config['medium_type'])
     elif config['agent_alg'] == 'MADDPG':
         MODEL = MADDPG
         comm_env = None
@@ -113,6 +137,10 @@ def init(config):
     elif config['agent_alg'] == 'ORACLE':
         MODEL = ORACLE
         comm_env = None
+    elif config['agent_alg'] == 'MSDDPG':
+        MODEL = MSDDPG
+        comm_env = None
+        
 
     if config['agent_type'] == 'basic':
         from macomm.agents.basic import Actor, Critic
@@ -177,6 +205,7 @@ def run(model, experiment_args, train=True):
     
     start_episode = start_episode if train else 0
     NUM_EPISODES = config['n_episodes'] if train else config['n_episodes_test'] 
+    EPISODE_LENGTH = config['episode_length'] if train else config['episode_length_test'] 
     
     reward_best = float("-inf")
     avg_reward_best = float("-inf")
@@ -195,6 +224,7 @@ def run(model, experiment_args, train=True):
         observations = np.stack(env.reset())
         observations = K.tensor(observations, dtype=K.float32).unsqueeze(1)
         #comm_env.reset()
+        prev_actions = K.zeros((model.num_agents, 1, model.action_space))
 
         episode_rewards = np.zeros((model.num_agents,1,1))
         episode_comm_rewards = np.zeros((model.num_agents,1,1))
@@ -206,7 +236,7 @@ def run(model, experiment_args, train=True):
             for i in range(model.num_agents):
                 model.comm_actors[i].init()
 
-        for i_step in range(config['episode_length']):
+        for i_step in range(EPISODE_LENGTH):
 
             model.to_cpu()
             
@@ -231,13 +261,14 @@ def run(model, experiment_args, train=True):
                 if config['comm_agent_type'] == 'lstm':
                     comm_contexts = K.stack(comm_contexts).cpu()
                     next_comm_contexts = K.stack(next_comm_contexts).cpu()
-
-                medium, comm_rewards = comm_env.step(observations, comm_actions)
+                
+                medium, comm_rewards = comm_env.step(observations, comm_actions, prev_actions)
                 medium = K.tensor(medium, dtype=K.float32)
                 comm_rewards = K.tensor(comm_rewards, dtype=dtype).view(-1,1,1)
                 episode_comm_rewards += comm_rewards 
 
             actions = []
+            explorer = np.random.randint(model.num_agents)
             for i in range(model.num_agents):
                 if model.discrete:
                     if model.communication is not None:
@@ -253,8 +284,13 @@ def run(model, experiment_args, train=True):
                     else:
                         if config['agent_alg'] == 'ORACLE':
                             action = model.select_action(observations, i, ounoise if train else False)
+                        elif config['agent_alg'] == 'MSDDPG':
+                            action = model.select_action(K.cat([observations[[i], ], observations[[0], ]], dim=-1), i, ounoise if train else False)
                         else:
-                            action = model.select_action(observations[[i], ], i, ounoise if train else False)
+                            if config['exploration'] == 'EOBO':
+                                action = model.select_action(observations[[i], ], i, ounoise if (train and i == explorer)  else False)
+                            else:
+                                action = model.select_action(observations[[i], ], i, ounoise if train else False)
                 actions.append(action)
             actions = K.stack(actions).cpu()
 
@@ -264,7 +300,7 @@ def run(model, experiment_args, train=True):
             episode_rewards += rewards      
 
             # if it is the last step we don't need next obs
-            if i_step == config['episode_length']-1:
+            if i_step == EPISODE_LENGTH-1:
                 next_observations = None
                 next_comm_contexts = None
 
@@ -274,12 +310,13 @@ def run(model, experiment_args, train=True):
                     if config['comm_agent_type'] == 'lstm':
                         memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, comm_contexts, next_comm_contexts)
                     else:
-                        memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards)
+                        memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, prev_actions)
                 else:
                     memory.push(observations, actions, next_observations, rewards)
 
             # Move to the next state
             observations = next_observations
+            prev_actions = actions
             t += 1
             
             # Use experience replay and train the model
@@ -291,7 +328,7 @@ def run(model, experiment_args, train=True):
                     actor_losses = []                  
                     for i in range(env.n):
                         if model.communication is not None:
-                            if config['comm_agent_type'] == 'lstm': 
+                            if config['comm_agent_type'] == 'lstm':
                                 batch = Transition_Comm_Lstm(*zip(*memory.sample(config['batch_size'])))
                             else:
                                 batch = Transition_Comm(*zip(*memory.sample(config['batch_size'])))

@@ -10,43 +10,24 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
         
         input_size = observation_space + action_space
-        hidden_size = 64*3
+        hidden_size = 128
         output_size = 1
 
-        self.hidden_size = hidden_size
-        self.has_context = True
+        self.has_context = False
         
-        self.GRU = nn.GRUCell(input_size, hidden_size)
-        self.FC = nn.Linear(hidden_size, output_size)
+        self.FC = nn.Sequential(nn.Linear(input_size, hidden_size), nn.ReLU(True),
+                                nn.Linear(hidden_size, hidden_size), nn.ReLU(True),
+                                nn.Linear(hidden_size, output_size))
         
-    def forward(self, s, a, h=None):
-        
+
+    def forward(self, s, a):
+
         s = K.cat(list(s), dim=1)
         a = K.cat(list(a), dim=1)
                 
-        x = K.cat([s, a], dim=1)
-
-        if h is None:
-            h = self.h
-        else: 
-            h = K.cat(list(h), dim=1)
-
-        h = self.GRU(x, h)
-        x = self.FC(h)
-
-        self.h = h
-
+        x = K.cat([s, a], dim=1)        
+        x = self.FC(x)
         return x
-    
-    def init(self, batch_size=1):
-        
-        h = K.zeros(batch_size, self.hidden_size)
-
-        self.h = h
-
-    def get_h(self):
-        
-        return self.h
     
     
 class Actor(nn.Module):
