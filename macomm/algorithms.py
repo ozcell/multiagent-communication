@@ -899,15 +899,15 @@ class MADCDDPG(MACDDPG):
         K.nn.utils.clip_grad_norm_(self.comm_actors[i_agent].parameters(), 0.5)
         self.comm_actors_optim[i_agent].step()
 
-        Q = self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1),
+        Q = self.critics[i_agent](K.cat([s[[i_agent],], m[[i_agent],]], dim=-1),
                                   a[[i_agent],])
 
         m_ = self.communication.get_m(s_, c_, a[:, mask, :])
         
         for i in range(self.num_agents):
-            a_[i,] = gumbel_softmax(self.actors_target[i](K.cat([s_[[i],], m_], dim=-1)), exploration=False)
+            a_[i,] = gumbel_softmax(self.actors_target[i](K.cat([s_[[i],], m_[[i],]], dim=-1)), exploration=False)
 
-        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_], dim=-1),
+        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_[[i],]], dim=-1),
                                                a_[[i_agent],]).detach()
 
         loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0)) 
@@ -920,13 +920,13 @@ class MADCDDPG(MACDDPG):
         m = self.communication.get_m(s, c, _a)
 
         for i in range(self.num_agents):
-            a[i,] = gumbel_softmax(self.actors[i](K.cat([s[[i],], m], dim=-1)), exploration=False)
+            a[i,] = gumbel_softmax(self.actors[i](K.cat([s[[i],], m[[i],]], dim=-1)), exploration=False)
 
-        loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1), 
+        loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m[[i],]], dim=-1), 
                                             a[[i_agent],]).mean()
         
         if self.regularization:
-            loss_actor += (self.actors[i_agent].get_preactivations(K.cat([s[[i_agent],], m], dim=-1))**2).mean()*1e-3
+            loss_actor += (self.actors[i_agent].get_preactivations(K.cat([s[[i_agent],], m[[i_agent],]], dim=-1))**2).mean()*1e-3
 
         self.actors_optim[i_agent].zero_grad()        
         loss_actor.backward()
