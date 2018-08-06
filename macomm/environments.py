@@ -22,54 +22,57 @@ class communication(object):
     def step(self, observations, comm_actions, prev_actions=None):
         
         comm_rewards = K.zeros(self.num_agents, dtype=observations.dtype).view(-1,1,1)
+        medium = K.zeros_like(observations)
         
-        if (comm_actions>0.5).sum().item() == 0: # channel stays idle
-            comm_rewards -= 1
-            if self.medium_type is 'obs_only':
-                medium = K.cat([K.zeros_like(observations[[0], ]), K.zeros((1,1,1), dtype=observations.dtype)], dim=-1)
-            else:
-                medium = K.cat([K.zeros_like(observations[[0], ]),
-                                K.zeros_like(prev_actions[[0], ]),
-                                K.zeros((1,1,1), dtype=observations.dtype)
-                                ], dim=-1)
-        elif (comm_actions>0.5).sum().item() > 1: # collision
-            comm_rewards[comm_actions>0.5] -= 1
-            if self.medium_type is 'obs_only':
-                medium = K.cat([K.zeros_like(observations[[0], ]), 
-                                (self.num_agents+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
-            else:
-                medium = K.cat([K.zeros_like(observations[[0], ]),
-                                K.zeros_like(prev_actions[[0], ]), 
-                                (self.num_agents+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
-        else:                                     # success
-            granted_agent = K.argmax((comm_actions>0.5)).item()
-            if self.protocol_type == 1:
-                if self.previous_granted_agent == granted_agent:
-                    self.consecuitive_count += 1
-                    if self.consecuitive_count > self.consecuitive_limit:
-                        comm_rewards -= 1#(self.consecuitive_count - self.consecuitive_limit)
+        for i in range(self.num_agents):
+
+            if (comm_actions[i]>0.5).sum().item() == 0: # channel stays idle
+                comm_rewards -= 1
+                if self.medium_type is 'obs_only':
+                    medium[[i], ] = K.cat([K.zeros_like(observations[[0], ]), K.zeros((1,1,1), dtype=observations.dtype)], dim=-1)
                 else:
-                    self.previous_granted_agent = granted_agent
-                    self.consecuitive_count = 0
-            elif self.protocol_type == 2:
-                grant = K.zeros((self.num_agents,1,1), dtype=K.uint8)
-                grant[granted_agent,] = 1
-                self.comm_hist = K.cat((self.comm_hist[:,1::,], grant), dim=1)
-                comm_rewards[(self.comm_hist.sum(dim=1, keepdim=True) == self.consecuitive_limit) + 
-                             (self.comm_hist.sum(dim=1, keepdim=True) == 0)] -= 1
-                
-            if self.medium_type is 'obs_only':
-                medium = K.cat([observations[[granted_agent], ], (granted_agent+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
-            else:
-                medium = K.cat([observations[[granted_agent], ],
-                                prev_actions[[granted_agent], ], 
-                                (granted_agent+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
+                    medium[[i], ] = K.cat([K.zeros_like(observations[[0], ]),
+                                    K.zeros_like(prev_actions[[0], ]),
+                                    K.zeros((1,1,1), dtype=observations.dtype)
+                                    ], dim=-1)
+            elif (comm_actions[i]>0.5).sum().item() > 1: # collision
+                comm_rewards[comm_actions[i]>0.5] -= 1
+                if self.medium_type is 'obs_only':
+                    medium[[i], ] = K.cat([K.zeros_like(observations[[0], ]), 
+                                    (self.num_agents+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
+                else:
+                    medium[[i], ] = K.cat([K.zeros_like(observations[[0], ]),
+                                    K.zeros_like(prev_actions[[0], ]), 
+                                    (self.num_agents+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
+            else:                                     # success
+                granted_agent = K.argmax((comm_actions[i]>0.5)).item()
+                if self.protocol_type == 1:
+                    if self.previous_granted_agent == granted_agent:
+                        self.consecuitive_count += 1
+                        if self.consecuitive_count > self.consecuitive_limit:
+                            comm_rewards -= 1#(self.consecuitive_count - self.consecuitive_limit)
+                    else:
+                        self.previous_granted_agent = granted_agent
+                        self.consecuitive_count = 0
+                elif self.protocol_type == 2:
+                    grant = K.zeros((self.num_agents,1,1), dtype=K.uint8)
+                    grant[granted_agent,] = 1
+                    self.comm_hist = K.cat((self.comm_hist[:,1::,], grant), dim=1)
+                    comm_rewards[(self.comm_hist.sum(dim=1, keepdim=True) == self.consecuitive_limit) + 
+                                (self.comm_hist.sum(dim=1, keepdim=True) == 0)] -= 1
+                    
+                if self.medium_type is 'obs_only':
+                    medium[[i], ] = K.cat([observations[[granted_agent], ], (granted_agent+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
+                else:
+                    medium[[i], ] = K.cat([observations[[granted_agent], ],
+                                    prev_actions[[granted_agent], ], 
+                                    (granted_agent+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
 
 
-            #if competitive_comm:
-            #    comm_rewards -= 0.75
-            #    comm_rewards[granted_agent] += 1.5  
-            #medium = K.cat([observations[[granted_agent], ], (granted_agent+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
+                #if competitive_comm:
+                #    comm_rewards -= 0.75
+                #    comm_rewards[granted_agent] += 1.5  
+                #medium = K.cat([observations[[granted_agent], ], (granted_agent+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
 
         comm_rewards = comm_rewards.numpy()
         medium = medium.numpy()

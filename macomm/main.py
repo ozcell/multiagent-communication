@@ -291,7 +291,7 @@ def run(model, experiment_args, train=True):
             for i in range(model.num_agents):
                 if model.discrete:
                     if model.communication is not None:
-                        action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, train)
+                        action = model.select_action(K.cat([observations[[i], ], medium[[i], ],], dim=-1), i, train)
                     else:
                         if config['agent_alg'] == 'ORACLE':
                             action = model.select_action(observations, i, train)
@@ -299,7 +299,7 @@ def run(model, experiment_args, train=True):
                             action = model.select_action(observations[[i], ], i, train)
                 else:
                     if model.communication is not None:
-                        action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, ounoise if train else False)
+                        action = model.select_action(K.cat([observations[[i], ], medium[[i], ],], dim=-1), i, ounoise if train else False)
                     else:
                         if config['agent_alg'] == 'ORACLE':
                             action = model.select_action(observations, i, ounoise if train else False)

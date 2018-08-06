@@ -785,8 +785,8 @@ class MADCDDPG(MACDDPG):
         self.comm_actors_optim = []
         
         for i in range(num_agents):
-            self.comm_actors.append(Comm_Actor(observation_space, 1, discrete, F.sigmoid).to(device))
-            self.comm_actors_target.append(Comm_Actor(observation_space, 1, discrete, F.sigmoid).to(device))
+            self.comm_actors.append(Comm_Actor(observation_space, num_agents, discrete, F.sigmoid).to(device))
+            self.comm_actors_target.append(Comm_Actor(observation_space, num_agents, discrete, F.sigmoid).to(device))
             self.comm_actors_optim.append(optimizer(self.comm_actors[i].parameters(), lr = actor_lr))
             
         for i in range(num_agents):
@@ -802,8 +802,8 @@ class MADCDDPG(MACDDPG):
         self.comm_critics_optim = []
         
         for i in range(num_agents):
-            self.comm_critics.append(Comm_Critic(observation_space, 1).to(device))
-            self.comm_critics_target.append(Comm_Critic(observation_space, 1).to(device))
+            self.comm_critics.append(Comm_Critic(observation_space, num_agents).to(device))
+            self.comm_critics_target.append(Comm_Critic(observation_space, num_agents).to(device))
             self.comm_critics_optim.append(optimizer(self.comm_critics[i].parameters(), lr = critic_lr))
 
         for i in range(num_agents):
