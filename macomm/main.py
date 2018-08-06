@@ -8,8 +8,8 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from macomm.algorithms import MADDPG, MACDDPG, DDPG, ORACLE, MACCDDPG, MADCDDPG, MSDDPG
-from macomm.environments import communication, make_env_cont
+from macomm.algorithms import MADDPG, MACDDPG, DDPG, ORACLE, MACCDDPG, MADCDDPG, MSDDPG, MS3DDPG, MADCDDPG_WS, MADCDDPG_WSC
+from macomm.environments import communication, communication_v2, make_env_cont
 from macomm.experience import ReplayMemory, ReplayMemoryComm, Transition, Transition_Comm, ReplayMemoryCommLstm, Transition_Comm_Lstm
 from macomm.exploration import OUNoise
 from macomm.utils import Saver, Summarizer, get_noise_scale, get_params, running_mean
@@ -95,7 +95,7 @@ def init(config):
         action_space = env.action_space[0].n
         OUT_FUNC = F.sigmoid
 
-    if config['agent_alg'] == 'MSDDPG':
+    if config['agent_alg'] == 'MSDDPG' or config['agent_alg'] == 'MS3DDPG':
         if config['medium_type'] == 'obs_only':
             medium_space = observation_space
         elif config['medium_type'] == 'obs_act':
@@ -128,6 +128,18 @@ def init(config):
                                  consecuitive_limit=CONS_LIM, 
                                  num_agents=num_agents,
                                  medium_type=config['medium_type'])
+    elif config['agent_alg'] == 'MADCDDPG_WS':
+        MODEL = MADCDDPG_WS
+        comm_env = communication(protocol_type=PROTOCOL, 
+                                 consecuitive_limit=CONS_LIM, 
+                                 num_agents=num_agents,
+                                 medium_type=config['medium_type'])
+    elif config['agent_alg'] == 'MADCDDPG_WSC':
+        MODEL = MADCDDPG_WSC
+        comm_env = communication(protocol_type=PROTOCOL, 
+                                 consecuitive_limit=CONS_LIM, 
+                                 num_agents=num_agents,
+                                 medium_type=config['medium_type'])
     elif config['agent_alg'] == 'MADDPG':
         MODEL = MADDPG
         comm_env = None
@@ -139,6 +151,9 @@ def init(config):
         comm_env = None
     elif config['agent_alg'] == 'MSDDPG':
         MODEL = MSDDPG
+        comm_env = None
+    elif config['agent_alg'] == 'MS3DDPG':
+        MODEL = MS3DDPG
         comm_env = None
         
 
@@ -232,8 +247,10 @@ def run(model, experiment_args, train=True):
         ounoise.scale = get_noise_scale(i_episode, config)
         comm_ounoise.scale = get_noise_scale(i_episode, config)
 
+        num_comm_agents = 1 if config['agent_alg'] == 'MADCDDPG_WSC' else model.num_agents
+
         if model.communication is not None and config['comm_agent_type'] == 'lstm':
-            for i in range(model.num_agents):
+            for i in range(num_comm_agents):
                 model.comm_actors[i].init()
 
         for i_step in range(EPISODE_LENGTH):
@@ -247,14 +264,16 @@ def run(model, experiment_args, train=True):
 
                 for i in range(model.num_agents):
                     if config['comm_agent_type'] == 'lstm':
-                        comm_context = model.comm_actors[i].get_h()
+                        comm_context = model.comm_actors[0].get_h() if config['agent_alg'] == 'MADCDDPG_WSC' else model.comm_actors[i].get_h()
+                        #comm_context = model.comm_actors[i].get_h()
                         comm_contexts.append(comm_context)
 
                     comm_action = model.select_comm_action(observations[[i], ], i, comm_ounoise if train else False)
                     comm_actions.append(comm_action)
 
                     if config['comm_agent_type'] == 'lstm':
-                        next_comm_context = model.comm_actors[i].get_h()
+                        next_comm_context = model.comm_actors[0].get_h() if config['agent_alg'] == 'MADCDDPG_WSC' else model.comm_actors[i].get_h()
+                        #next_comm_context = model.comm_actors[i].get_h()
                         next_comm_contexts.append(next_comm_context)
 
                 comm_actions = K.stack(comm_actions).cpu()
@@ -286,6 +305,8 @@ def run(model, experiment_args, train=True):
                             action = model.select_action(observations, i, ounoise if train else False)
                         elif config['agent_alg'] == 'MSDDPG':
                             action = model.select_action(K.cat([observations[[i], ], observations[[0], ]], dim=-1), i, ounoise if train else False)
+                        elif config['agent_alg'] == 'MS3DDPG':
+                            action = model.select_action(K.cat([observations[[i], ], observations[[(i-1)%model.num_agents], ]], dim=-1), i, ounoise if train else False)
                         else:
                             if config['exploration'] == 'EOBO':
                                 action = model.select_action(observations[[i], ], i, ounoise if (train and i == explorer)  else False)
@@ -308,7 +329,7 @@ def run(model, experiment_args, train=True):
             if train:
                 if model.communication is not None:
                     if config['comm_agent_type'] == 'lstm':
-                        memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, comm_contexts, next_comm_contexts)
+                        memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, comm_contexts, next_comm_contexts, prev_actions)
                     else:
                         memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, prev_actions)
                 else:

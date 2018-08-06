@@ -41,7 +41,7 @@ class ReplayMemoryComm(ReplayMemory):
         self.memory[self.position] = Transition_Comm(*args)
         self.position = (self.position + 1) % self.capacity
 
-Transition_Comm_Lstm = namedtuple('Transition_Comm', ('state', 'action', 'next_state', 'reward', 'medium', 'comm_action', 'comm_reward', 'comm_context', 'next_comm_context'))
+Transition_Comm_Lstm = namedtuple('Transition_Comm', ('state', 'action', 'next_state', 'reward', 'medium', 'comm_action', 'comm_reward', 'comm_context', 'next_comm_context', 'prev_action'))
 
 class ReplayMemoryCommLstm(ReplayMemory):
 
