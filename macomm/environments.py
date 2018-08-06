@@ -22,11 +22,16 @@ class communication(object):
     def step(self, observations, comm_actions, prev_actions=None):
         
         comm_rewards = K.zeros(self.num_agents, dtype=observations.dtype).view(-1,1,1)
-        medium = K.zeros_like(observations)
-        
+        if self.medium_type is 'obs_only':
+            medium = K.zeros((self.num_agents, observations.shape[1], observations.shape[2]+1), 
+                            dtype=observations.dtype, device=observations.device)
+        else:
+            medium = K.zeros((self.num_agents, observations.shape[1], observations.shape[2]+prev_actions.shape[2]+1), 
+                            dtype=observations.dtype, device=observations.device)  
+
         for i in range(self.num_agents):
 
-            if (comm_actions[i]>0.5).sum().item() == 0: # channel stays idle
+            if (comm_actions[i].reshape(-1)>0.5).sum().item() == 0: # channel stays idle
                 comm_rewards -= 1
                 if self.medium_type is 'obs_only':
                     medium[[i], ] = K.cat([K.zeros_like(observations[[0], ]), K.zeros((1,1,1), dtype=observations.dtype)], dim=-1)
@@ -35,8 +40,8 @@ class communication(object):
                                     K.zeros_like(prev_actions[[0], ]),
                                     K.zeros((1,1,1), dtype=observations.dtype)
                                     ], dim=-1)
-            elif (comm_actions[i]>0.5).sum().item() > 1: # collision
-                comm_rewards[comm_actions[i]>0.5] -= 1
+            elif (comm_actions[i].reshape(-1)>0.5).sum().item() > 1: # collision
+                comm_rewards[comm_actions[i].reshape(-1)>0.5] -= 1
                 if self.medium_type is 'obs_only':
                     medium[[i], ] = K.cat([K.zeros_like(observations[[0], ]), 
                                     (self.num_agents+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
@@ -45,7 +50,7 @@ class communication(object):
                                     K.zeros_like(prev_actions[[0], ]), 
                                     (self.num_agents+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
             else:                                     # success
-                granted_agent = K.argmax((comm_actions[i]>0.5)).item()
+                granted_agent = K.argmax((comm_actions[i].reshape(-1)>0.5)).item()
                 if self.protocol_type == 1:
                     if self.previous_granted_agent == granted_agent:
                         self.consecuitive_count += 1
@@ -94,7 +99,7 @@ class communication(object):
 
 
         for j in range(self.num_agents):
-
+            pdb.set_trace()
             granted_agent = (comm_actions[j]>0.5).argmax(dim=0)[:,0]
             for i in range(self.num_agents):
                 #if competitive_comm:
