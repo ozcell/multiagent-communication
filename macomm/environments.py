@@ -95,65 +95,65 @@ class communication(object):
 
         for j in range(self.num_agents):
 
-        granted_agent = (comm_actions[j]>0.5).argmax(dim=0)[:,0]
-        for i in range(self.num_agents):
-            #if competitive_comm:
-            #    comm_rewards[i, granted_agent == i, :] = 1
-            if self.medium_type is 'obs_only':
-                medium[[j], granted_agent == i, :] = K.cat([observations[[i],][:, granted_agent==i, :], 
-                                                          (i+1)*K.ones((1,(granted_agent==i).sum().item(),1), 
-                                                                    dtype=observations.dtype, device=observations.device)], dim=-1)
-            else:
-                medium[[j], granted_agent == i, :] = K.cat([observations[[i],][:, granted_agent==i, :], 
-                                                          prev_actions[[i],][:, granted_agent==i, :], 
-                                                          (i+1)*K.ones((1,(granted_agent==i).sum().item(),1), 
-                                                                    dtype=observations.dtype, device=observations.device)], dim=-1)               
+            granted_agent = (comm_actions[j]>0.5).argmax(dim=0)[:,0]
+            for i in range(self.num_agents):
+                #if competitive_comm:
+                #    comm_rewards[i, granted_agent == i, :] = 1
+                if self.medium_type is 'obs_only':
+                    medium[[j], granted_agent == i, :] = K.cat([observations[[i],][:, granted_agent==i, :], 
+                                                            (i+1)*K.ones((1,(granted_agent==i).sum().item(),1), 
+                                                                        dtype=observations.dtype, device=observations.device)], dim=-1)
+                else:
+                    medium[[j], granted_agent == i, :] = K.cat([observations[[i],][:, granted_agent==i, :], 
+                                                            prev_actions[[i],][:, granted_agent==i, :], 
+                                                            (i+1)*K.ones((1,(granted_agent==i).sum().item(),1), 
+                                                                        dtype=observations.dtype, device=observations.device)], dim=-1)               
 
 
-        if K.is_nonzero(((comm_actions[j]>0.5).sum(dim=0) == 0)[:,0].sum()):
-            #comm_rewards[:,((comm_actions[j]>0.5).sum(dim=0) == 0)[:,0],:] = -1
-            if self.medium_type is 'obs_only':
-                medium[[j], ((comm_actions[j]>0.5).sum(dim=0) == 0)[:,0], :] = K.cat([K.zeros((1,1,observations.shape[2]),
-                                                                                        dtype=observations.dtype, 
-                                                                                        device=observations.device),
-                                                                                K.zeros((1,1,1), 
-                                                                                        dtype=observations.dtype, 
-                                                                                        device=observations.device)], 
-                                                                            dim=-1)
-            else:
-                medium[[j], ((comm_actions[j]>0.5).sum(dim=0) == 0)[:,0], :] = K.cat([K.zeros((1,1,observations.shape[2]),
-                                                                                        dtype=observations.dtype, 
-                                                                                        device=observations.device),
+            if K.is_nonzero(((comm_actions[j]>0.5).sum(dim=0) == 0)[:,0].sum()):
+                #comm_rewards[:,((comm_actions[j]>0.5).sum(dim=0) == 0)[:,0],:] = -1
+                if self.medium_type is 'obs_only':
+                    medium[[j], ((comm_actions[j]>0.5).sum(dim=0) == 0)[:,0], :] = K.cat([K.zeros((1,1,observations.shape[2]),
+                                                                                            dtype=observations.dtype, 
+                                                                                            device=observations.device),
+                                                                                    K.zeros((1,1,1), 
+                                                                                            dtype=observations.dtype, 
+                                                                                            device=observations.device)], 
+                                                                                dim=-1)
+                else:
+                    medium[[j], ((comm_actions[j]>0.5).sum(dim=0) == 0)[:,0], :] = K.cat([K.zeros((1,1,observations.shape[2]),
+                                                                                            dtype=observations.dtype, 
+                                                                                            device=observations.device),
+                                                                                    K.zeros((1,1,prev_actions.shape[2]),
+                                                                                            dtype=observations.dtype, 
+                                                                                            device=observations.device),
+                                                                                    K.zeros((1,1,1), 
+                                                                                            dtype=observations.dtype, 
+                                                                                            device=observations.device)], 
+                                                                                dim=-1)
+
+                
+            if K.is_nonzero(((comm_actions[j]>0.5).sum(dim=0) > 1)[:,0].sum()):
+                #comm_rewards[:,((comm_actions[j]>0.5).sum(dim=0) > 1)[:,0],:] = -1
+                if self.medium_type is 'obs_only':
+                    medium[[j], ((comm_actions[j]>0.5).sum(dim=0) > 1)[:,0], :] = K.cat([K.zeros((1,1,observations.shape[2]),
+                                                                                            dtype=observations.dtype, 
+                                                                                            device=observations.device),
+                                                                                K.ones((1,1,1), 
+                                                                                            dtype=observations.dtype, 
+                                                                                            device=observations.device)*(self.num_agents+1)], 
+                                                                                dim=-1)
+                else:
+                    medium[[j], ((comm_actions[j]>0.5).sum(dim=0) > 1)[:,0], :] = K.cat([K.zeros((1,1,observations.shape[2]),
+                                                                                            dtype=observations.dtype, 
+                                                                                            device=observations.device),
                                                                                 K.zeros((1,1,prev_actions.shape[2]),
-                                                                                        dtype=observations.dtype, 
-                                                                                        device=observations.device),
-                                                                                K.zeros((1,1,1), 
-                                                                                        dtype=observations.dtype, 
-                                                                                        device=observations.device)], 
-                                                                            dim=-1)
-
-            
-        if K.is_nonzero(((comm_actions[j]>0.5).sum(dim=0) > 1)[:,0].sum()):
-            #comm_rewards[:,((comm_actions[j]>0.5).sum(dim=0) > 1)[:,0],:] = -1
-            if self.medium_type is 'obs_only':
-                medium[[j], ((comm_actions[j]>0.5).sum(dim=0) > 1)[:,0], :] = K.cat([K.zeros((1,1,observations.shape[2]),
-                                                                                        dtype=observations.dtype, 
-                                                                                        device=observations.device),
-                                                                               K.ones((1,1,1), 
-                                                                                        dtype=observations.dtype, 
-                                                                                        device=observations.device)*(self.num_agents+1)], 
-                                                                            dim=-1)
-            else:
-                medium[[j], ((comm_actions[j]>0.5).sum(dim=0) > 1)[:,0], :] = K.cat([K.zeros((1,1,observations.shape[2]),
-                                                                                        dtype=observations.dtype, 
-                                                                                        device=observations.device),
-                                                                               K.zeros((1,1,prev_actions.shape[2]),
-                                                                                        dtype=observations.dtype, 
-                                                                                        device=observations.device),
-                                                                               K.ones((1,1,1), 
-                                                                                        dtype=observations.dtype, 
-                                                                                        device=observations.device)*(self.num_agents+1)], 
-                                                                            dim=-1)
+                                                                                            dtype=observations.dtype, 
+                                                                                            device=observations.device),
+                                                                                K.ones((1,1,1), 
+                                                                                            dtype=observations.dtype, 
+                                                                                            device=observations.device)*(self.num_agents+1)], 
+                                                                                dim=-1)
 
         return K.tensor(medium, requires_grad=True)
 
