@@ -766,6 +766,7 @@ class MADCDDPG(MACDDPG):
         self.critics = []
         self.critics_target = []
         self.critics_optim = []
+
         
         for i in range(num_agents):
             self.critics.append(Critic(observation_space+medium_space, action_space).to(device))
@@ -785,8 +786,8 @@ class MADCDDPG(MACDDPG):
         self.comm_actors_optim = []
         
         for i in range(num_agents):
-            self.comm_actors.append(Comm_Actor(observation_space, num_agents, discrete, F.sigmoid).to(device))
-            self.comm_actors_target.append(Comm_Actor(observation_space, num_agents, discrete, F.sigmoid).to(device))
+            self.comm_actors.append(Comm_Actor(observation_space, num_agents, discrete, F.softmax).to(device))
+            self.comm_actors_target.append(Comm_Actor(observation_space, num_agents, discrete, F.softmax).to(device))
             self.comm_actors_optim.append(optimizer(self.comm_actors[i].parameters(), lr = actor_lr))
             
         for i in range(num_agents):
@@ -907,7 +908,7 @@ class MADCDDPG(MACDDPG):
         for i in range(self.num_agents):
             a_[i,] = gumbel_softmax(self.actors_target[i](K.cat([s_[[i],], m_[[i],]], dim=-1)), exploration=False)
 
-        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_[[i],]], dim=-1),
+        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_[[i_agent],]], dim=-1),
                                                a_[[i_agent],]).detach()
 
         loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0)) 
@@ -922,7 +923,7 @@ class MADCDDPG(MACDDPG):
         for i in range(self.num_agents):
             a[i,] = gumbel_softmax(self.actors[i](K.cat([s[[i],], m[[i],]], dim=-1)), exploration=False)
 
-        loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m[[i],]], dim=-1), 
+        loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m[[i_agent],]], dim=-1), 
                                             a[[i_agent],]).mean()
         
         if self.regularization:
