@@ -866,14 +866,16 @@ class MADCDDPG(MACDDPG):
         W[mask] = self.comm_critics_target[i_agent](s_[[i_agent],], 
                                                     c_[[i_agent],]).detach()
 
-        #foo1 = t[[i_agent],].squeeze(0)
-        #foo2 = r[[i_agent],].squeeze(0)
+        foo1 = t[[i_agent],].squeeze(0)
+        foo2 = r[[i_agent],].squeeze(0)
 
-        #foo1 = (foo1-foo1.min())/(foo1.max()-foo1.min())
-        #foo2 = (foo2-foo2.min())/(foo2.max()-foo2.min())
+        foo1 = (foo1-foo1.min())/(foo1.max()-foo1.min())
+        foo2 = (foo2-foo2.min())/(foo2.max()-foo2.min())
+        foo3 = K.abs(foo1-foo2)
         
         #loss_comm_critic = self.loss_func(R, (W * self.gamma) + foo1 + foo2)
-        loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0) + r[[i_agent],].squeeze(0))
+        loss_comm_critic = self.loss_func(R, (W * self.gamma) + foo1 + foo2 + foo3)
+        #loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0) + r[[i_agent],].squeeze(0))
         #loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0))
 
         self.comm_critics_optim[i_agent].zero_grad()
