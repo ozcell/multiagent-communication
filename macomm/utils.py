@@ -75,6 +75,28 @@ def plot_durations(durations):
 
     plt.pause(0.001)  # pause a bit so that plots are updated
 
+def intrinsic_reward(env, medium):
+    # Agents are rewarded based on minimum agent distance to each landmark, penalized for collisions
+    rew_all = []
+    landmarks = medium.reshape(-1,)[4:10].reshape(-1,2)
+    medium_p_state = medium.reshape(-1,)[2:4].reshape(-1,2)
+    for agent in env.agents:
+        rew = 0
+        for i in range(env.n):
+            dists = [np.sqrt(np.sum(np.square(a.state.p_pos - (landmarks[i] + medium_p_state)))) for a in env.agents]
+            rew -= min(dists)
+        if agent.collide:
+            for a in env.agents:
+                if is_collision(a, agent):
+                    rew -= 1
+        rew_all.append(rew)
+    return rew_all
+
+def is_collision(agent1, agent2):
+        delta_pos = agent1.state.p_pos - agent2.state.p_pos
+        dist = np.sqrt(np.sum(np.square(delta_pos)))
+        dist_min = agent1.size + agent2.size
+        return True if dist < dist_min else False
 
 def get_params(args=[], verbose=False):
 
@@ -127,8 +149,7 @@ def get_params(args=[], verbose=False):
                         choices=['MACDDPG', 'MADDPG', 'DDPG', 'ORACLE', 
                         'MACCDDPG', 'MADCDDPG', 
                         'MSDDPG', 'MS3DDPG', 
-                        'MADCDDPG_WS', 'MADCDDPG_WSC', 'MADCDDPG_v2', 'MADCDDPG_MS', 'MADCDDPG_Trained',
-                        'MAMDDPG', 'MAHCDDPG', 'MAHCDDPG_Disc'])
+                        'MADCDDPG_WS', 'MADCDDPG_WSC', 'MADCDDPG_v2', 'MADCDDPG_MS', 'MADCDDPG_Trained'])
     parser.add_argument("--device", default='cuda',
                         choices=['cpu','cuda'], 
                         help="device type")
@@ -140,12 +161,6 @@ def get_params(args=[], verbose=False):
                         help="communication protocol type")
     parser.add_argument("--consecuitive_limit", default=5, type=int, 
                         help="number of allowed consecuitive writings")
-    #parser.add_argument("--mem_dim", default=4, type=int, 
-    #                    help="shared memory dimension")
-    #parser.add_argument("--agent_type", default='memory_water',
-    #                    choices=['all_1mlp', 'all_2mlp', 
-    #                             'a_2mlp_c_1mlp', 'a_water_c_water',
-    #                             'memory_water'], help="agent type")
 
     parser.add_argument("--agent_type", default='basic',
                         choices=['basic', 'deep', 'lstm'], help="agent type")
@@ -249,6 +264,178 @@ def get_params(args=[], verbose=False):
         args['discrete_action'] = True
     else:
         args['discrete_action'] = False
+
+    # discrete actions
+    if args['regularization'] == 'True':
+        args['regularization'] = True
+    else:
+        args['regularization'] = False
+
+    # discrete actions
+    if args['reward_normalization'] == 'True':
+        args['reward_normalization'] = True
+    else:
+        args['reward_normalization'] = False
+
+    if verbose:
+        print("\n==> Arguments:")
+        for k,v in sorted(args.items()):
+            print('{}: {}'.format(k,v))
+        print('\n')
+
+
+    return args
+
+
+def get_params2(args=[], verbose=False):
+
+    print("\n\n\n\n")
+    print("==============================")
+    print("Acquiring Arguments")
+    print("==============================")
+
+
+    parser = argparse.ArgumentParser(description='Arguments')
+
+    # positional
+    parser.add_argument("--env_id", default='simple_spread', help="Name of environment")
+
+    # general settings
+    parser.add_argument('--random_seed', default=1,type=int,
+                        help='random seed for repeatability')
+    parser.add_argument("--buffer_length", default=int(1e6), type=int,
+                        help="replay memory buffer capacity")
+    parser.add_argument("--n_episodes", default=60000, type=int,
+                        help="number of episodes")
+    parser.add_argument("--n_episodes_test", default=1000, type=int,
+                        help="number of episodes")
+    parser.add_argument("--episode_length", default=25, type=int,
+                        help="number of steps for episode")
+    parser.add_argument("--episode_length_test", default=25, type=int,
+                        help="number of steps for episode")
+    parser.add_argument("--steps_per_update", default=100, type=int,
+                        help="target networks update frequency")
+    parser.add_argument("--batch_size", default=1024, type=int,
+                        help="batch size for model training")
+    parser.add_argument("--n_exploration_eps", default=-1, type=int,
+                        help="exploration epsilon, -1: n_episodes")
+    parser.add_argument("--init_noise_scale", default=0.3, type=float,
+                        help="noise initialization")
+    parser.add_argument("--final_noise_scale", default=0.0, type=float,
+                        help="noise stop updates value")
+    parser.add_argument("--save_epochs", default=5000, type=int,
+                        help="save model interval")
+    parser.add_argument("--plcy_lr", default=0.01, type=float,
+                        help="learning rate")
+    parser.add_argument("--crtc_lr", default=0.01, type=float,
+                        help="learning rate")
+    parser.add_argument("--tau", default=0.01, type=float,
+                        help="soft update parameter")
+    parser.add_argument("--gamma", default=0.95, type=float,
+                        help="discount factor")
+    parser.add_argument("--agent_alg",
+                        default="MAHCDDPG_Disc", type=str,
+                        choices=['MAMDDPG', 'MAHCDDPG', 'MAHCDDPG_Disc', 'MAHDDDPG_Disc'])
+    parser.add_argument("--device", default='cuda',
+                        choices=['cpu','cuda'], 
+                        help="device type")
+    parser.add_argument("--plcy_hidden_dim", default=128, type=int, 
+                        help="actor hidden state dimension")
+    parser.add_argument("--crtc_hidden_dim", default=64, type=int, 
+                        help="critic hidden state dimension")      
+
+    parser.add_argument("--hierarchical_time_scale", default=5, type=int, 
+                        help="time scale of the upper policy")
+    parser.add_argument("--aux_reward_type", default='intrinsic',
+                        choices=['intrinsic', 'cummulative'], help="auxilary reward type")
+
+
+    parser.add_argument("--agent_type", default='basic',
+                        choices=['basic', 'deep'], help="agent type")
+    parser.add_argument("--comm_agent_type", default='basic',
+                        choices=['basic', 'deep'], help="communication agent type")
+    # path arguments
+    parser.add_argument('--exp_id', default='no_id',
+                        help='experiment ID')
+    parser.add_argument('--dir_base', default='./experiments',
+                        help='path of the experiment directory')
+    parser.add_argument('--port', default=0, type=int,\
+                         help='tensorboardX port')
+    parser.add_argument('--exp_descr', default='',
+                         help='short experiment description')
+
+    # experiment modality
+    parser.add_argument('--resume', default='',
+                        help='path in case resume is needed')
+    parser.add_argument('--expmode', default='normal',
+                        help='fast exp mode is usually used to try is code run')
+    parser.add_argument("--render", default=0, type=int,
+                        help="epochs interval for rendering, 0: no rendering")
+    parser.add_argument("--benchmark", action="store_true",
+                        help="benchmark mode")
+    parser.add_argument("--regularization", default="True",
+                        choices=['True', 'False'],
+                        help="Applying regulation to action preactivations")
+    parser.add_argument("--reward_normalization", default="True",
+                        choices=['True', 'False'],
+                        help="Normalizing the rewards")
+
+
+    parser.add_argument('--verbose', default=1, type=int,\
+                         help='monitoring level')
+
+
+    # acquire in a dict
+    config = parser.parse_args(args)
+    args   = vars(config)
+
+    # set arguments which need dependencies
+    dir_exp_name = '{}_{}_{}_{}'.format(str([datetime.date.today()][0]),
+                                  args['env_id'],
+                                  args['agent_type'],
+                                  args['exp_id'])
+
+    args['dir_exp'] = '{}/{}'.format(args['dir_base'],dir_exp_name)
+    args['dir_saved_models'] = '{}/saved_models'.format(args['dir_exp'])
+    args['dir_summary_train'] = '{}/summary/train'.format(args['dir_exp'])
+    args['dir_summary_test'] = '{}/summary/test'.format(args['dir_exp'])
+    args['dir_monitor_train'] = '{}/monitor/train'.format(args['dir_exp'])
+    args['dir_monitor_test'] = '{}/monitor/test'.format(args['dir_exp'])
+    # get current process pid
+    args['process_pid'] = os.getpid()
+
+    # creating folders:
+    directory = args['dir_exp']
+    if os.path.exists(directory) and args['resume'] == '':
+        toDelete= input("{} already exists, delete it if do you want to continue. Delete it? (yes/no) ".\
+            format(directory))
+
+        if toDelete.lower() == 'yes':
+            shutil.rmtree(directory)
+            print("Directory removed")
+        if toDelete == 'No':
+            print("It was not possible to continue, an experiment \
+                   folder is required.Terminiting here.")
+            sys.exit()
+    if os.path.exists(directory) == False and args['resume'] == '':
+        os.makedirs(directory)
+        os.makedirs(args['dir_saved_models'])
+        os.makedirs(args['dir_summary_train'])
+        os.makedirs(args['dir_summary_test'])
+        os.makedirs(args['dir_monitor_train'])
+        os.makedirs(args['dir_monitor_test'])
+
+    time.sleep(1)
+    with open(os.path.expanduser('{}/arguments.txt'.format(args['dir_exp'])), 'w+') as file:
+        file.write(json.dumps(args, indent=4, sort_keys=True))
+
+    if args['expmode'] == 'fast':
+        args['batch_size'] = 8
+        args['max_episode_len'] = 50
+
+    # noise
+    if args['n_exploration_eps'] < 0:
+        args['n_exploration_eps'] = args['n_episodes']
 
     # discrete actions
     if args['regularization'] == 'True':
