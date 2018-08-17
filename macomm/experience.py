@@ -30,7 +30,7 @@ class ReplayMemory(object):
     def __len__(self):
         return len(self.memory)
 
-Transition_Comm = namedtuple('Transition_Comm', ('state', 'action', 'next_state', 'reward', 'medium', 'comm_action', 'comm_reward', 'prev_action'))
+Transition_Comm = namedtuple('Transition_Comm', ('state', 'action', 'next_state', 'reward', 'medium', 'comm_action', 'comm_reward', 'prev_action', 'prev_medium'))
 
 class ReplayMemoryComm(ReplayMemory):
 

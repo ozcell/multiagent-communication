@@ -570,8 +570,8 @@ class MACCDDPG(MACDDPG):
         self.critics_optim = []
         
         for i in range(num_agents):
-            self.critics.append(Critic(observation_space*num_agents, action_space*num_agents).to(device))
-            self.critics_target.append(Critic(observation_space*num_agents, action_space*num_agents).to(device))
+            self.critics.append(Critic(observation_space*num_agents+medium_space, action_space*num_agents).to(device))
+            self.critics_target.append(Critic(observation_space*num_agents+medium_space, action_space*num_agents).to(device))
             self.critics_optim.append(optimizer(self.critics[i].parameters(), lr = critic_lr))
 
         for i in range(num_agents):
@@ -657,7 +657,7 @@ class MACCDDPG(MACDDPG):
         W[mask] = self.comm_critics_target[i_agent](s_, c_).detach()
         
         loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0) + r[[i_agent],].squeeze(0))
-        #loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0))
+        #loss_comm_critic = self.loss_func(R, (W * self.gamma) + r[[i_agent],].squeeze(0))
 
         self.comm_critics_optim[i_agent].zero_grad()
         loss_comm_critic.backward()
@@ -682,14 +682,15 @@ class MACCDDPG(MACDDPG):
         K.nn.utils.clip_grad_norm_(self.comm_actors[i_agent].parameters(), 0.5)
         self.comm_actors_optim[i_agent].step()
 
-        Q = self.critics[i_agent](s, a)
+        Q = self.critics[i_agent](s, a, m)
 
         m_ = self.communication.get_m(s_, c_, a[:, mask, :])
         
+        #pdb.set_trace()
         for i in range(self.num_agents):
-            a_[i,] = gumbel_softmax(self.actors_target[i](K.cat([s_[[i],], m_], dim=-1)), exploration=False)
+            a_[i,] = self.actors_target[i](K.cat([s_[[i],], m_], dim=-1))
 
-        V[mask] = self.critics_target[i_agent](s_, a_).detach()
+        V[mask] = self.critics_target[i_agent](s_, a_, m_).detach()
 
         loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0)) 
 
@@ -700,10 +701,11 @@ class MACCDDPG(MACDDPG):
 
         m = self.communication.get_m(s, c, _a)
 
+        #pdb.set_trace()
         for i in range(self.num_agents):
-            a[i,] = gumbel_softmax(self.actors[i](K.cat([s[[i],], m], dim=-1)), exploration=False)
+            a[i,] = self.actors[i](K.cat([s[[i],], m], dim=-1))
 
-        loss_actor = -self.critics[i_agent](s, a).mean()
+        loss_actor = -self.critics[i_agent](s, a, m).mean()
         
         if self.regularization:
             loss_actor += (self.actors[i_agent].get_preactivations(K.cat([s[[i_agent],], m], dim=-1))**2).mean()*1e-3
@@ -730,6 +732,8 @@ class MADCDDPG(MACDDPG):
 
         optimizer, lr = optimizer
         actor_lr, critic_lr = lr
+
+        print('oops it has changed again')
 
         #self.num_agents = num_agents
         #self.loss_func = loss_func
@@ -865,14 +869,375 @@ class MADCDDPG(MACDDPG):
         W[mask] = self.comm_critics_target[i_agent](s_[[i_agent],], 
                                                     c_[[i_agent],]).detach()
 
-        #foo1 = t[[i_agent],].squeeze(0)
-        #foo2 = r[[i_agent],].squeeze(0)
+        
+        foo1 = t[[i_agent],].squeeze(0)
+        #foo1 = K.tensor(foo1.squeeze(1), dtype=K.uint8, device=self.device)
+        foo2 = r[[i_agent],].squeeze(0)
 
-        #foo1 = (foo1-foo1.min())/(foo1.max()-foo1.min())
-        #foo2 = (foo2-foo2.min())/(foo2.max()-foo2.min())
+        foo1 = (foo1-foo1.min())/(foo1.max()-foo1.min())
+        foo2 = (foo2-foo2.min())/(foo2.max()-foo2.min())
+        foo3 = 1-K.abs(foo1-foo2)
+
+        #pdb.set_trace()
+        
+        loss_comm_critic = self.loss_func(R, (W * self.gamma) + foo1 + foo2)
+        #loss_comm_critic = self.loss_func(R, (W * self.gamma) + foo2)
+        #loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0) + r[[i_agent],].squeeze(0))
+        #loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0))
+
+        self.comm_critics_optim[i_agent].zero_grad()
+        loss_comm_critic.backward()
+        K.nn.utils.clip_grad_norm_(self.comm_critics[i_agent].parameters(), 0.5)
+        self.comm_critics_optim[i_agent].step()
+
+        for i in range(self.num_agents):
+            if self.comm_actors[0].has_context:
+                c[i,] = self.comm_actors[i](s[[i],], h[[i],])
+            else:
+                c[i,] = self.comm_actors[i](s[[i],])
+
+        loss_comm_actor = -self.comm_critics[i_agent](s[[i_agent],], 
+                                                      c[[i_agent],]).mean()
+        if self.regularization:
+            if self.comm_actors[0].has_context:
+                loss_comm_actor += (self.comm_actors[i_agent].get_preactivations(s[[i_agent],], h[[i_agent],])**2).mean()*1e-3
+            else:
+                loss_comm_actor += (self.comm_actors[i_agent].get_preactivations(s[[i_agent],])**2).mean()*1e-3
+
+        self.comm_actors_optim[i_agent].zero_grad()        
+        loss_comm_actor.backward()
+        K.nn.utils.clip_grad_norm_(self.comm_actors[i_agent].parameters(), 0.5)
+        self.comm_actors_optim[i_agent].step()
+        
+        Q = self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1),
+                                  a[[i_agent],])
+
+        m_ = self.communication.get_m(s_, c_, a[:, mask, :])
+        
+        for i in range(self.num_agents):
+            a_[i,] = self.actors_target[i](K.cat([s_[[i],], m_], dim=-1))
+
+        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_], dim=-1),
+                                               a_[[i_agent],]).detach()
+
+        #loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0)) 
+        #pdb.set_trace()
+        loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0))
+        #loss_critic = self.loss_func(Q, (V * self.gamma) + foo1 + foo2 + foo3)
+
+        self.critics_optim[i_agent].zero_grad()
+        loss_critic.backward()
+        K.nn.utils.clip_grad_norm_(self.critics[i_agent].parameters(), 0.5)
+        self.critics_optim[i_agent].step()
+
+        m = self.communication.get_m(s, c, _a)
+
+        for i in range(self.num_agents):
+            a[i,] = self.actors[i](K.cat([s[[i],], m], dim=-1))
+
+        #loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1), 
+        #                                    a[[i_agent],]).mean()
+
+        loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1), 
+                                            a[[i_agent],]).mean()
+        
+        if self.regularization:
+            #loss_actor += (self.actors[i_agent].get_preactivations(K.cat([s[[i_agent],], m], dim=-1))**2).mean()*1e-3
+            loss_actor += (self.actors[i_agent].get_preactivations(K.cat([s[[i_agent],], m], dim=-1))**2).mean()*1e-3
+
+        self.actors_optim[i_agent].zero_grad()        
+        loss_actor.backward()
+        K.nn.utils.clip_grad_norm_(self.actors[i_agent].parameters(), 0.5)
+        self.actors_optim[i_agent].step()
+
+        soft_update(self.comm_actors_target[i_agent], self.comm_actors[i_agent], self.tau)
+        soft_update(self.comm_critics_target[i_agent], self.comm_critics[i_agent], self.tau)
+        soft_update(self.actors_target[i_agent], self.actors[i_agent], self.tau)
+        soft_update(self.critics_target[i_agent], self.critics[i_agent], self.tau)
+        
+        return loss_critic.item(), loss_actor.item()
+
+
+class MADCDDPG_Single(MACDDPG): # uncomplete
+    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func=F.sigmoid,
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, Comm_Actor=None, Comm_Critic=None, dtype=K.float32, device="cuda"):
+        
+        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func,
+                         discrete, regularization, normalized_rewards, communication, Comm_Actor, Comm_Critic, dtype, device)
+
+        optimizer, lr = optimizer
+        actor_lr, critic_lr = lr
+
+        print('oops it has changed again')
+
+        # model initialization
+        self.entities = []
+
+        # actors
+        self.actors = []
+        self.actors_target = []
+        self.actors_optim = []
+        
+        for i in range(num_agents):
+            self.actors.append(Actor(observation_space+medium_space, action_space+1, discrete, out_func).to(device))
+            self.actors_target.append(Actor(observation_space+medium_space, action_space+1, discrete, out_func).to(device))
+            self.actors_optim.append(optimizer(self.actors[i].parameters(), lr = actor_lr))
+            
+        for i in range(num_agents):
+            hard_update(self.actors_target[i], self.actors[i])
+
+        self.entities.extend(self.actors)
+        self.entities.extend(self.actors_target)
+        self.entities.extend(self.actors_optim) 
+        
+        # critics   
+        self.critics = []
+        self.critics_target = []
+        self.critics_optim = []
+        
+        for i in range(num_agents):
+            self.critics.append(Critic(observation_space+medium_space, action_space+1).to(device))
+            self.critics_target.append(Critic(observation_space+medium_space, action_space+1).to(device))
+            self.critics_optim.append(optimizer(self.critics[i].parameters(), lr = critic_lr))
+
+        for i in range(num_agents):
+            hard_update(self.critics_target[i], self.critics[i])
+            
+        self.entities.extend(self.critics)
+        self.entities.extend(self.critics_target)
+        self.entities.extend(self.critics_optim)    
+
+    def update_parameters(self, batch, i_agent):
+        
+        mask = K.tensor(tuple(map(lambda s: s is not None, batch.next_state)), dtype=K.uint8, device=self.device)
+
+        V = K.zeros((len(batch.state), 1), device=self.device)
+
+        s = K.cat(batch.state, dim=1).to(self.device)
+        a = K.cat(batch.action, dim=1).to(self.device)
+        r = K.cat(batch.reward, dim=1).to(self.device)
+        s_ = K.cat([i.to(self.device) for i in batch.next_state if i is not None], dim=1)
+        a_ = K.zeros_like(a)[:,0:s_.shape[1],]
+        
+       
+        m = K.cat(batch.medium, dim=1).to(self.device)
+        t = K.cat(batch.comm_reward, dim=1).to(self.device)
+        c = K.cat(batch.comm_action, dim=1).to(self.device)
+        m_ = K.zeros_like(m)[:,0:s_.shape[1],]
+        c_ = K.zeros_like(c)[:,0:s_.shape[1],]
+
+        if self.comm_actors[0].has_context:
+            h = K.cat(batch.comm_context, dim=1).to(self.device)
+            h_ = K.cat([i.to(self.device) for i in batch.next_comm_context if i is not None], dim=1)
+
+        if self.normalized_rewards:
+            r -= r.mean()
+            r /= r.std()
+            t -= t.mean()
+            t /= t.std()
+        
+        Q = self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1),
+                                  K.cat([a[[i_agent],], c[[i_agent],]], dim=-1))
+
+        m_ = self.communication.get_m(s_, c_, a[:, mask, :])
+        
+        for i in range(self.num_agents):
+            a_[i,], c_[i,]  = self.actors_target[i](K.cat([s_[[i],], m_], dim=-1))
+
+        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_], dim=-1),
+                                               K.cat([a_[[i_agent],], c_[[i_agent],]], dim=-1)).detach()
+
+        loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0))
+
+        self.critics_optim[i_agent].zero_grad()
+        loss_critic.backward()
+        K.nn.utils.clip_grad_norm_(self.critics[i_agent].parameters(), 0.5)
+        self.critics_optim[i_agent].step()
+
+        m = self.communication.get_m(s, c, _a)
+
+        for i in range(self.num_agents):
+            a[i,], c[i,] = self.actors[i](K.cat([s[[i],], m], dim=-1))
+
+        loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1), 
+                                            K.cat([a[[i_agent],], c[[i_agent],]], dim=-1)).mean()
+        
+        if self.regularization:
+            loss_actor += (self.actors[i_agent].get_preactivations(K.cat([s[[i_agent],], m], dim=-1))**2).mean()*1e-3
+
+        self.actors_optim[i_agent].zero_grad()        
+        loss_actor.backward()
+        K.nn.utils.clip_grad_norm_(self.actors[i_agent].parameters(), 0.5)
+        self.actors_optim[i_agent].step()
+
+        soft_update(self.actors_target[i_agent], self.actors[i_agent], self.tau)
+        soft_update(self.critics_target[i_agent], self.critics[i_agent], self.tau)
+        
+        return loss_critic.item(), loss_actor.item()
+
+
+class MADCDDPG_Trained(MACDDPG):
+    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func=F.sigmoid,
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, Comm_Actor=None, Comm_Critic=None, dtype=K.float32, device="cuda"):
+        
+        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func,
+                         discrete, regularization, normalized_rewards, communication, Comm_Actor, Comm_Critic, dtype, device)
+
+        optimizer, lr = optimizer
+        actor_lr, critic_lr = lr
+
+        print('oops it has changed')
+
+        #self.num_agents = num_agents
+        #self.loss_func = loss_func
+        #self.gamma = gamma
+        #self.tau = tau
+        #self.discrete = discrete
+        #self.regularization = regularization
+        #self.normalized_rewards = normalized_rewards
+        #self.dtype = dtype
+        #self.device = device
+        #self.communication = communication
+
+        # model initialization
+        self.entities = []
+
+        # actors
+        self.actors = []
+        self.actors_target = []
+        self.actors_optim = []
+        
+        for i in range(num_agents):
+            self.actors.append(Actor(observation_space+medium_space, action_space, discrete, out_func).to(device))
+            self.actors_target.append(Actor(observation_space+medium_space, action_space, discrete, out_func).to(device))
+            self.actors_optim.append(optimizer(self.actors[i].parameters(), lr = actor_lr))
+            
+        for i in range(num_agents):
+            hard_update(self.actors_target[i], self.actors[i])
+
+        self.entities.extend(self.actors)
+        self.entities.extend(self.actors_target)
+        self.entities.extend(self.actors_optim) 
+        
+        # critics   
+        self.critics = []
+        self.critics_target = []
+        self.critics_optim = []
+        
+        for i in range(num_agents):
+            self.critics.append(Critic(observation_space+medium_space, action_space).to(device))
+            self.critics_target.append(Critic(observation_space+medium_space, action_space).to(device))
+            self.critics_optim.append(optimizer(self.critics[i].parameters(), lr = critic_lr))
+
+        for i in range(num_agents):
+            hard_update(self.critics_target[i], self.critics[i])
+            
+        self.entities.extend(self.critics)
+        self.entities.extend(self.critics_target)
+        self.entities.extend(self.critics_optim)    
+
+        # communication actors
+        self.comm_actors = []
+        self.comm_actors_target = []
+        self.comm_actors_optim = []
+        
+        for i in range(num_agents):
+            self.comm_actors.append(Comm_Actor(observation_space, 1, discrete, F.sigmoid).to(device))
+            self.comm_actors_target.append(Comm_Actor(observation_space, 1, discrete, F.sigmoid).to(device))
+            self.comm_actors_optim.append(optimizer(self.comm_actors[i].parameters(), lr = actor_lr))
+            
+        for i in range(num_agents):
+            hard_update(self.comm_actors_target[i], self.comm_actors[i])
+
+        self.entities.extend(self.comm_actors)
+        self.entities.extend(self.comm_actors_target)
+        self.entities.extend(self.comm_actors_optim)
+
+        # communication critics   
+        self.comm_critics = []
+        self.comm_critics_target = []
+        self.comm_critics_optim = []
+        
+        for i in range(num_agents):
+            self.comm_critics.append(Comm_Critic(observation_space, 1).to(device))
+            self.comm_critics_target.append(Comm_Critic(observation_space, 1).to(device))
+            self.comm_critics_optim.append(optimizer(self.comm_critics[i].parameters(), lr = critic_lr))
+
+        for i in range(num_agents):
+            hard_update(self.comm_critics_target[i], self.comm_critics[i])
+
+        self.entities.extend(self.comm_critics)
+        self.entities.extend(self.comm_critics_target)
+        self.entities.extend(self.comm_critics_optim)
+
+        self.critics[0] = K.load('critic_0.pt')
+        self.critics[1] = K.load('critic_1.pt')
+        self.critics[2] = K.load('critic_2.pt')
+
+        self.actors[0] = K.load('actor_0.pt')
+        self.actors[1] = K.load('actor_1.pt')
+        self.actors[2] = K.load('actor_2.pt')
+
+    def select_comm_action(self, state, i_agent, exploration=False):
+        self.comm_actors[i_agent].eval()
+        with K.no_grad():
+            mu = self.comm_actors[i_agent](state.to(self.device))
+        self.comm_actors[i_agent].train()
+        if exploration:
+            mu += K.tensor(exploration.noise(), dtype=self.dtype, device=self.device)
+        return mu.clamp(0, 1) 
+
+    def update_parameters(self, batch, i_agent):
+        
+        mask = K.tensor(tuple(map(lambda s: s is not None, batch.next_state)), dtype=K.uint8, device=self.device)
+
+        s = K.cat(batch.state, dim=1).to(self.device)
+        r = K.cat(batch.reward, dim=1).to(self.device)
+        _a = K.cat(batch.prev_action, dim=1).to(self.device)
+        s_ = K.cat([i.to(self.device) for i in batch.next_state if i is not None], dim=1)
+        
+        W = K.zeros((len(batch.state), 1), device=self.device)
+        
+        m = K.cat(batch.medium, dim=1).to(self.device)
+        t = K.cat(batch.comm_reward, dim=1).to(self.device)
+        c = K.cat(batch.comm_action, dim=1).to(self.device)
+        m_ = K.zeros_like(m)[:,0:s_.shape[1],]
+        c_ = K.zeros_like(c)[:,0:s_.shape[1],]
+
+        if self.comm_actors[0].has_context:
+            h = K.cat(batch.comm_context, dim=1).to(self.device)
+            h_ = K.cat([i.to(self.device) for i in batch.next_comm_context if i is not None], dim=1)
+
+        if self.normalized_rewards:
+            r -= r.mean()
+            r /= r.std()
+            #t -= t.mean()
+            #t /= t.std()
+
+        R = self.comm_critics[i_agent](s[[i_agent],],
+                                       c[[i_agent],])
+
+        for i in range(self.num_agents):
+            if self.comm_actors[0].has_context:
+                c_[i,] = self.comm_actors_target[i](s_[[i],], h_[[i],])
+            else:
+                c_[i,] = self.comm_actors_target[i](s_[[i],])
+        
+        W[mask] = self.comm_critics_target[i_agent](s_[[i_agent],], 
+                                                    c_[[i_agent],]).detach()
+
+        foo1 = t[[i_agent],].squeeze(0)
+        foo2 = r[[i_agent],].squeeze(0)
+
+        #foo1 = (foo1-foo1.min())/(foo1.max()-foo1.min())+1
+        #foo2 = (foo2-foo2.min())/(foo2.max()-foo2.min())+1
+        #foo3 = 1-K.abs(foo1-foo2)
+
+        #pdb.set_trace()
         
         #loss_comm_critic = self.loss_func(R, (W * self.gamma) + foo1 + foo2)
-        loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0) + r[[i_agent],].squeeze(0))
+        loss_comm_critic = self.loss_func(R, (W * self.gamma) + foo2)
+        #loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0) + r[[i_agent],].squeeze(0))
         #loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0))
 
         self.comm_critics_optim[i_agent].zero_grad()
@@ -899,10 +1264,148 @@ class MADCDDPG(MACDDPG):
         K.nn.utils.clip_grad_norm_(self.comm_actors[i_agent].parameters(), 0.5)
         self.comm_actors_optim[i_agent].step()
 
+        soft_update(self.comm_actors_target[i_agent], self.comm_actors[i_agent], self.tau)
+        soft_update(self.comm_critics_target[i_agent], self.comm_critics[i_agent], self.tau)
+        
+        return loss_comm_critic.item(), loss_comm_actor.item()
+
+
+class MADCDDPG_MS(MACDDPG):
+    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func=F.sigmoid,
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, Comm_Actor=None, Comm_Critic=None, dtype=K.float32, device="cuda"):
+        
+        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func,
+                         discrete, regularization, normalized_rewards, communication, Comm_Actor, Comm_Critic, dtype, device)
+
+        optimizer, lr = optimizer
+        actor_lr, critic_lr = lr
+
+        print('oops it has changed')
+
+        #self.num_agents = num_agents
+        #self.loss_func = loss_func
+        #self.gamma = gamma
+        #self.tau = tau
+        #self.discrete = discrete
+        #self.regularization = regularization
+        #self.normalized_rewards = normalized_rewards
+        #self.dtype = dtype
+        #self.device = device
+        #self.communication = communication
+
+        # model initialization
+        self.entities = []
+
+        # actors
+        self.actors = []
+        self.actors_target = []
+        self.actors_optim = []
+        
+        for i in range(num_agents):
+            self.actors.append(Actor(observation_space+medium_space, action_space, discrete, out_func).to(device))
+            self.actors_target.append(Actor(observation_space+medium_space, action_space, discrete, out_func).to(device))
+            self.actors_optim.append(optimizer(self.actors[i].parameters(), lr = actor_lr))
+            
+        for i in range(num_agents):
+            hard_update(self.actors_target[i], self.actors[i])
+
+        self.entities.extend(self.actors)
+        self.entities.extend(self.actors_target)
+        self.entities.extend(self.actors_optim) 
+        
+        # critics   
+        self.critics = []
+        self.critics_target = []
+        self.critics_optim = []
+        
+        for i in range(num_agents):
+            self.critics.append(Critic(observation_space+medium_space, action_space).to(device))
+            self.critics_target.append(Critic(observation_space+medium_space, action_space).to(device))
+            self.critics_optim.append(optimizer(self.critics[i].parameters(), lr = critic_lr))
+
+        for i in range(num_agents):
+            hard_update(self.critics_target[i], self.critics[i])
+            
+        self.entities.extend(self.critics)
+        self.entities.extend(self.critics_target)
+        self.entities.extend(self.critics_optim)    
+
+        # communication actors
+        self.comm_actors = []
+        self.comm_actors_target = []
+        self.comm_actors_optim = []
+        
+        for i in range(num_agents):
+            self.comm_actors.append(Comm_Actor(observation_space, 1, discrete, F.sigmoid).to(device))
+            self.comm_actors_target.append(Comm_Actor(observation_space, 1, discrete, F.sigmoid).to(device))
+            self.comm_actors_optim.append(optimizer(self.comm_actors[i].parameters(), lr = actor_lr))
+            
+        for i in range(num_agents):
+            hard_update(self.comm_actors_target[i], self.comm_actors[i])
+
+        self.entities.extend(self.comm_actors)
+        self.entities.extend(self.comm_actors_target)
+        self.entities.extend(self.comm_actors_optim)
+
+        # communication critics   
+        self.comm_critics = []
+        self.comm_critics_target = []
+        self.comm_critics_optim = []
+        
+        for i in range(num_agents):
+            self.comm_critics.append(Comm_Critic(observation_space, 1).to(device))
+            self.comm_critics_target.append(Comm_Critic(observation_space, 1).to(device))
+            self.comm_critics_optim.append(optimizer(self.comm_critics[i].parameters(), lr = critic_lr))
+
+        for i in range(num_agents):
+            hard_update(self.comm_critics_target[i], self.comm_critics[i])
+
+        self.entities.extend(self.comm_critics)
+        self.entities.extend(self.comm_critics_target)
+        self.entities.extend(self.comm_critics_optim)
+    
+    def select_comm_action(self, state, i_agent, exploration=False):
+        self.comm_actors[i_agent].eval()
+        with K.no_grad():
+            mu = self.comm_actors[i_agent](state.to(self.device))
+        self.comm_actors[i_agent].train()
+        if exploration:
+            mu += K.tensor(exploration.noise(), dtype=self.dtype, device=self.device)
+        return mu.clamp(0, 1) 
+
+    def update_parameters(self, batch, i_agent):
+        
+        mask = K.tensor(tuple(map(lambda s: s is not None, batch.next_state)), dtype=K.uint8, device=self.device)
+
+        V = K.zeros((len(batch.state), 1), device=self.device)
+
+        s = K.cat(batch.state, dim=1).to(self.device)
+        a = K.cat(batch.action, dim=1).to(self.device)
+        r = K.cat(batch.reward, dim=1).to(self.device)
+        _a = K.cat(batch.prev_action, dim=1).to(self.device)
+        s_ = K.cat([i.to(self.device) for i in batch.next_state if i is not None], dim=1)
+        a_ = K.zeros_like(a)[:,0:s_.shape[1],]
+        
+        W = K.zeros((len(batch.state), 1), device=self.device)
+        
+        m = K.cat(batch.medium, dim=1).to(self.device)
+        t = K.cat(batch.comm_reward, dim=1).to(self.device)
+        c = K.cat(batch.comm_action, dim=1).to(self.device)
+        m_ = K.cat(batch.prev_medium, dim=1).to(self.device)
+        c_ = K.zeros_like(c)[:,0:s_.shape[1],]
+
+        if self.comm_actors[0].has_context:
+            h = K.cat(batch.comm_context, dim=1).to(self.device)
+            h_ = K.cat([i.to(self.device) for i in batch.next_comm_context if i is not None], dim=1)
+
+        if self.normalized_rewards:
+            r -= r.mean()
+            r /= r.std()
+            t -= t.mean()
+            t /= t.std()
+
         Q = self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1),
                                   a[[i_agent],])
-
-        m_ = self.communication.get_m(s_, c_, a[:, mask, :])
         
         for i in range(self.num_agents):
             a_[i,] = gumbel_softmax(self.actors_target[i](K.cat([s_[[i],], m_], dim=-1)), exploration=False)
@@ -916,8 +1419,6 @@ class MADCDDPG(MACDDPG):
         loss_critic.backward()
         K.nn.utils.clip_grad_norm_(self.critics[i_agent].parameters(), 0.5)
         self.critics_optim[i_agent].step()
-
-        m = self.communication.get_m(s, c, _a)
 
         for i in range(self.num_agents):
             a[i,] = gumbel_softmax(self.actors[i](K.cat([s[[i],], m], dim=-1)), exploration=False)
@@ -1611,3 +2112,752 @@ class MADCDDPG_WSC(MACDDPG):
         soft_update(self.critics_target[i_agent], self.critics[i_agent], self.tau)
         
         return loss_critic.item(), loss_actor.item()
+
+
+class MADCDDPG_v2(MACDDPG):
+    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func=F.sigmoid,
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, Comm_Actor=None, Comm_Critic=None, dtype=K.float32, device="cuda"):
+        
+        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func,
+                         discrete, regularization, normalized_rewards, communication, Comm_Actor, Comm_Critic, dtype, device)
+
+        optimizer, lr = optimizer
+        actor_lr, critic_lr = lr
+
+        #self.num_agents = num_agents
+        #self.loss_func = loss_func
+        #self.gamma = gamma
+        #self.tau = tau
+        #self.discrete = discrete
+        #self.regularization = regularization
+        #self.normalized_rewards = normalized_rewards
+        #self.dtype = dtype
+        #self.device = device
+        #self.communication = communication
+
+        # model initialization
+        self.entities = []
+
+        # actors
+        self.actors = []
+        self.actors_target = []
+        self.actors_optim = []
+        
+        for i in range(num_agents):
+            self.actors.append(Actor(observation_space+medium_space, action_space, discrete, out_func).to(device))
+            self.actors_target.append(Actor(observation_space+medium_space, action_space, discrete, out_func).to(device))
+            self.actors_optim.append(optimizer(self.actors[i].parameters(), lr = actor_lr))
+            
+        for i in range(num_agents):
+            hard_update(self.actors_target[i], self.actors[i])
+
+        self.entities.extend(self.actors)
+        self.entities.extend(self.actors_target)
+        self.entities.extend(self.actors_optim) 
+        
+        # critics   
+        self.critics = []
+        self.critics_target = []
+        self.critics_optim = []
+        
+        for i in range(num_agents):
+            self.critics.append(Critic(observation_space+medium_space, action_space).to(device))
+            self.critics_target.append(Critic(observation_space+medium_space, action_space).to(device))
+            self.critics_optim.append(optimizer(self.critics[i].parameters(), lr = critic_lr))
+
+        for i in range(num_agents):
+            hard_update(self.critics_target[i], self.critics[i])
+            
+        self.entities.extend(self.critics)
+        self.entities.extend(self.critics_target)
+        self.entities.extend(self.critics_optim)    
+
+        # communication actors
+        self.comm_actors = []
+        self.comm_actors_target = []
+        self.comm_actors_optim = []
+        
+        for i in range(num_agents):
+            self.comm_actors.append(Comm_Actor(observation_space+medium_space, 1, discrete, F.sigmoid).to(device))
+            self.comm_actors_target.append(Comm_Actor(observation_space+medium_space, 1, discrete, F.sigmoid).to(device))
+            self.comm_actors_optim.append(optimizer(self.comm_actors[i].parameters(), lr = actor_lr))
+            
+        for i in range(num_agents):
+            hard_update(self.comm_actors_target[i], self.comm_actors[i])
+
+        self.entities.extend(self.comm_actors)
+        self.entities.extend(self.comm_actors_target)
+        self.entities.extend(self.comm_actors_optim)
+
+        # communication critics   
+        self.comm_critics = []
+        self.comm_critics_target = []
+        self.comm_critics_optim = []
+        
+        for i in range(num_agents):
+            self.comm_critics.append(Comm_Critic(observation_space+medium_space, 1).to(device))
+            self.comm_critics_target.append(Comm_Critic(observation_space+medium_space, 1).to(device))
+            self.comm_critics_optim.append(optimizer(self.comm_critics[i].parameters(), lr = critic_lr))
+
+        for i in range(num_agents):
+            hard_update(self.comm_critics_target[i], self.comm_critics[i])
+
+        self.entities.extend(self.comm_critics)
+        self.entities.extend(self.comm_critics_target)
+        self.entities.extend(self.comm_critics_optim)
+    
+    def select_comm_action(self, state, i_agent, exploration=False):
+        self.comm_actors[i_agent].eval()
+        with K.no_grad():
+            mu = self.comm_actors[i_agent](state.to(self.device))
+        self.comm_actors[i_agent].train()
+        if exploration:
+            mu += K.tensor(exploration.noise(), dtype=self.dtype, device=self.device)
+        return mu.clamp(0, 1) 
+
+    def update_parameters(self, batch, i_agent):
+        
+        mask = K.tensor(tuple(map(lambda s: s is not None, batch.next_state)), dtype=K.uint8, device=self.device)
+
+        V = K.zeros((len(batch.state), 1), device=self.device)
+
+        s = K.cat(batch.state, dim=1).to(self.device)
+        a = K.cat(batch.action, dim=1).to(self.device)
+        r = K.cat(batch.reward, dim=1).to(self.device)
+        _a = K.cat(batch.prev_action, dim=1).to(self.device)
+        s_ = K.cat([i.to(self.device) for i in batch.next_state if i is not None], dim=1)
+        a_ = K.zeros_like(a)[:,0:s_.shape[1],]
+        
+        W = K.zeros((len(batch.state), 1), device=self.device)
+        
+        m = K.cat(batch.medium, dim=1).to(self.device)
+        t = K.cat(batch.comm_reward, dim=1).to(self.device)
+        c = K.cat(batch.comm_action, dim=1).to(self.device)
+        _m = K.cat(batch.prev_medium, dim=1).to(self.device)
+        m_ = K.zeros_like(m)[:,0:s_.shape[1],]
+        c_ = K.zeros_like(c)[:,0:s_.shape[1],]
+
+        if self.comm_actors[0].has_context:
+            h = K.cat(batch.comm_context, dim=1).to(self.device)
+            h_ = K.cat([i.to(self.device) for i in batch.next_comm_context if i is not None], dim=1)
+
+        if self.normalized_rewards:
+            r -= r.mean()
+            r /= r.std()
+            t -= t.mean()
+            t /= t.std()
+
+        R = self.comm_critics[i_agent](K.cat([s[[i_agent],], _m], dim=-1),
+                                       c[[i_agent],])
+
+        for i in range(self.num_agents):
+            if self.comm_actors[0].has_context:     
+                c_[i,] = self.comm_actors_target[i](K.cat([s_[[i],], m], dim=-1), h_[[i],])
+            else:
+                c_[i,] = self.comm_actors_target[i](K.cat([s_[[i],], m], dim=-1))
+        
+        W[mask] = self.comm_critics_target[i_agent](K.cat([s_[[i_agent],], m], dim=-1),
+                                                    c_[[i_agent],]).detach()
+
+        foo1 = t[[i_agent],].squeeze(0)
+        foo2 = r[[i_agent],].squeeze(0)
+
+        foo1 = (foo1-foo1.min())/(foo1.max()-foo1.min())
+        foo2 = (foo2-foo2.min())/(foo2.max()-foo2.min())
+        foo3 = 1-K.abs(foo1-foo2)
+
+        #pdb.set_trace()
+        
+        loss_comm_critic = self.loss_func(R, (W * self.gamma) + foo1 + foo2)
+        #loss_comm_critic = self.loss_func(R, (W * self.gamma) + foo1 + foo2 + foo3)
+        #loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0) + r[[i_agent],].squeeze(0))
+        #loss_comm_critic = self.loss_func(R, (W * self.gamma) + t[[i_agent],].squeeze(0))
+
+        self.comm_critics_optim[i_agent].zero_grad()
+        loss_comm_critic.backward()
+        K.nn.utils.clip_grad_norm_(self.comm_critics[i_agent].parameters(), 0.5)
+        self.comm_critics_optim[i_agent].step()
+
+        for i in range(self.num_agents):
+            if self.comm_actors[0].has_context:
+                c[i,] = self.comm_actors[i](K.cat([s[[i],], _m], dim=-1), h[[i],])
+            else:
+                c[i,] = self.comm_actors[i](K.cat([s[[i],], _m], dim=-1))
+
+        loss_comm_actor = -self.comm_critics[i_agent](K.cat([s[[i_agent],], _m], dim=-1),
+                                                      c[[i_agent],]).mean()
+        if self.regularization:
+            if self.comm_actors[0].has_context:
+                loss_comm_actor += (self.comm_actors[i_agent].get_preactivations(K.cat([s[[i_agent],], _m], dim=-1), h[[i_agent],])**2).mean()*1e-3
+            else:
+                loss_comm_actor += (self.comm_actors[i_agent].get_preactivations(K.cat([s[[i_agent],], _m], dim=-1))**2).mean()*1e-3
+
+        self.comm_actors_optim[i_agent].zero_grad()        
+        loss_comm_actor.backward()
+        K.nn.utils.clip_grad_norm_(self.comm_actors[i_agent].parameters(), 0.5)
+        self.comm_actors_optim[i_agent].step()
+
+        Q = self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1),
+                                  a[[i_agent],])
+
+        m_ = self.communication.get_m(s_, c_, a[:, mask, :])
+        
+        for i in range(self.num_agents):
+            a_[i,] = gumbel_softmax(self.actors_target[i](K.cat([s_[[i],], m_], dim=-1)), exploration=False)
+
+        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_], dim=-1),
+                                               a_[[i_agent],]).detach()
+
+        loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0)) 
+
+        self.critics_optim[i_agent].zero_grad()
+        loss_critic.backward()
+        K.nn.utils.clip_grad_norm_(self.critics[i_agent].parameters(), 0.5)
+        self.critics_optim[i_agent].step()
+
+        m = self.communication.get_m(s, c, _a)
+
+        for i in range(self.num_agents):
+            a[i,] = gumbel_softmax(self.actors[i](K.cat([s[[i],], m], dim=-1)), exploration=False)
+
+        loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1), 
+                                            a[[i_agent],]).mean()
+        
+        if self.regularization:
+            loss_actor += (self.actors[i_agent].get_preactivations(K.cat([s[[i_agent],], m], dim=-1))**2).mean()*1e-3
+
+        self.actors_optim[i_agent].zero_grad()        
+        loss_actor.backward()
+        K.nn.utils.clip_grad_norm_(self.actors[i_agent].parameters(), 0.5)
+        self.actors_optim[i_agent].step()
+
+        soft_update(self.comm_actors_target[i_agent], self.comm_actors[i_agent], self.tau)
+        soft_update(self.comm_critics_target[i_agent], self.comm_critics[i_agent], self.tau)
+        soft_update(self.actors_target[i_agent], self.actors[i_agent], self.tau)
+        soft_update(self.critics_target[i_agent], self.critics[i_agent], self.tau)
+        
+        return loss_critic.item(), loss_actor.item()
+
+
+class MAMDDPG(MADDPG):
+    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func=F.sigmoid,
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, Comm_Actor=None, Comm_Critic=None, dtype=K.float32, device="cuda"):
+        
+        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func,
+                         discrete, regularization, normalized_rewards, communication, Comm_Actor, Comm_Critic, dtype, device)
+
+        optimizer, lr = optimizer
+        actor_lr, critic_lr = lr
+
+        # model initialization
+        self.entities = []
+
+        # medium  
+        self.mediums = []
+        self.mediums_optim = []
+
+        for i in range(1):
+            self.mediums.append(communication(observation_space*num_agents, medium_space).to(device))
+            self.mediums_optim.append(optimizer(self.mediums[i].parameters(), lr = critic_lr))
+
+        self.entities.extend(self.mediums)
+        self.entities.extend(self.mediums_optim) 
+        
+        # actors
+        self.actors = []
+        self.actors_target = []
+        self.actors_optim = []
+        
+        for i in range(num_agents):
+            self.actors.append(Actor(observation_space+medium_space, action_space, discrete, out_func).to(device))
+            self.actors_target.append(Actor(observation_space+medium_space, action_space, discrete, out_func).to(device))
+            self.actors_optim.append(optimizer(self.actors[i].parameters(), lr = actor_lr))
+
+        for i in range(num_agents):
+            hard_update(self.actors_target[i], self.actors[i])
+
+        self.entities.extend(self.actors)
+        self.entities.extend(self.actors_target)
+        self.entities.extend(self.actors_optim) 
+        
+        # critics   
+        self.critics = []
+        self.critics_target = []
+        self.critics_optim = []
+        
+        for i in range(num_agents):
+            #self.critics.append(Critic(observation_space*num_agents+medium_space, action_space*num_agents).to(device))
+            #self.critics_target.append(Critic(observation_space*num_agents+medium_space, action_space*num_agents).to(device))
+            self.critics.append(Critic(observation_space+medium_space, action_space).to(device))
+            self.critics_target.append(Critic(observation_space+medium_space, action_space).to(device))
+            self.critics_optim.append(optimizer(self.critics[i].parameters(), lr = critic_lr))
+
+        for i in range(num_agents):
+            hard_update(self.critics_target[i], self.critics[i])
+            
+        self.entities.extend(self.critics)
+        self.entities.extend(self.critics_target)
+        self.entities.extend(self.critics_optim)     
+
+    def update_ae(self, batch):
+
+        s = K.cat(batch.state, dim=1).to(self.device)
+        s_recon = self.mediums[0](s)
+        s = K.cat(list(s), dim=1) 
+
+        loss_medium = self.loss_func(s, s_recon)
+
+        self.mediums_optim[0].zero_grad()
+        loss_medium.backward()
+        self.mediums_optim[0].step()
+
+        return loss_medium.item()
+
+    def update_parameters(self, batch, i_agent):
+        
+        mask = K.tensor(tuple(map(lambda s: s is not None, batch.next_state)), dtype=K.uint8, device=self.device)
+
+        V = K.zeros((len(batch.state), 1), device=self.device)
+
+        s = K.cat(batch.state, dim=1).to(self.device)
+        a = K.cat(batch.action, dim=1).to(self.device)
+        r = K.cat(batch.reward, dim=1).to(self.device)
+        s_ = K.cat([i.to(self.device) for i in batch.next_state if i is not None], dim=1)
+        a_ = K.zeros_like(a)[:,0:s_.shape[1],]
+        
+        m = K.cat(batch.medium, dim=1).to(self.device)
+        m_ = K.zeros_like(m)[:,0:s_.shape[1],]
+
+        if self.normalized_rewards:
+            r -= r.mean()
+            r /= r.std()
+
+        with K.no_grad():
+            m = self.mediums[0].get_m(s).unsqueeze(0)
+            m_ = self.mediums[0].get_m(s_).unsqueeze(0)
+        
+        Q = self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1),
+                                  a[[i_agent],])
+        #Q = self.critics[i_agent](s, a, m)
+        
+        for i in range(self.num_agents):
+            a_[i,] = self.actors_target[i](K.cat([s_[[i],], m_], dim=-1))
+
+        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_], dim=-1),
+                                               a_[[i_agent],]).detach()
+
+        #V[mask] = self.critics_target[i_agent](s_, a_, m_).detach()
+
+        loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0)) 
+
+        self.critics_optim[i_agent].zero_grad()
+        loss_critic.backward()
+        K.nn.utils.clip_grad_norm_(self.critics[i_agent].parameters(), 0.5)
+        self.critics_optim[i_agent].step()
+
+        for i in range(self.num_agents):
+            a[i,] = self.actors[i](K.cat([s[[i],], m], dim=-1))
+
+        loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1), 
+                                            a[[i_agent],]).mean()
+
+        #loss_actor = -self.critics[i_agent](s, a, m).mean()
+        
+        if self.regularization:
+            loss_actor += (self.actors[i_agent].get_preactivations(K.cat([s[[i_agent],], m], dim=-1))**2).mean()*1e-3
+
+        self.actors_optim[i_agent].zero_grad()        
+        loss_actor.backward()
+        K.nn.utils.clip_grad_norm_(self.actors[i_agent].parameters(), 0.5)
+        K.nn.utils.clip_grad_norm_(self.mediums[0].parameters(), 0.5)
+        self.actors_optim[i_agent].step()
+
+        soft_update(self.actors_target[i_agent], self.actors[i_agent], self.tau)
+        soft_update(self.critics_target[i_agent], self.critics[i_agent], self.tau)
+        
+        return loss_critic.item(), loss_actor.item()
+
+
+class MAHCDDPG(MADDPG):
+    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func=F.sigmoid,
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, Comm_Actor=None, Comm_Critic=None, dtype=K.float32, device="cuda"):
+        
+        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func,
+                         discrete, regularization, normalized_rewards, communication, Comm_Actor, Comm_Critic, dtype, device)
+
+        optimizer, lr = optimizer
+        actor_lr, critic_lr = lr
+
+        # model initialization
+        self.entities = []
+        
+        # actors
+        self.actors = []
+        self.actors_target = []
+        self.actors_optim = []
+        
+        for i in range(num_agents):
+            self.actors.append(Actor(observation_space+medium_space, action_space, discrete, out_func).to(device))
+            self.actors_target.append(Actor(observation_space+medium_space, action_space, discrete, out_func).to(device))
+            self.actors_optim.append(optimizer(self.actors[i].parameters(), actor_lr))
+
+        for i in range(num_agents):
+            hard_update(self.actors_target[i], self.actors[i])
+
+        self.entities.extend(self.actors)
+        self.entities.extend(self.actors_target)
+        self.entities.extend(self.actors_optim) 
+        
+        # critics   
+        self.critics = []
+        self.critics_target = []
+        self.critics_optim = []
+        
+        for i in range(num_agents):
+            self.critics.append(Critic(observation_space+medium_space, action_space).to(device))
+            self.critics_target.append(Critic(observation_space+medium_space, action_space).to(device))
+            self.critics_optim.append(optimizer(self.critics[i].parameters(), lr = critic_lr))
+
+        for i in range(num_agents):
+            hard_update(self.critics_target[i], self.critics[i])
+            
+        self.entities.extend(self.critics)
+        self.entities.extend(self.critics_target)
+        self.entities.extend(self.critics_optim)    
+
+        # communication actors
+        self.comm_actors = []
+        self.comm_actors_target = []
+        self.comm_actors_optim = []
+        
+        for i in range(1):
+            self.comm_actors.append(Comm_Actor(observation_space*num_agents, medium_space, discrete, 'linear').to(device))
+            self.comm_actors_target.append(Comm_Actor(observation_space*num_agents, medium_space, discrete, 'linear').to(device))
+            self.comm_actors_optim.append(optimizer(self.comm_actors[i].parameters(), lr = actor_lr))
+            
+        for i in range(1):
+            hard_update(self.comm_actors_target[i], self.comm_actors[i])
+
+        self.entities.extend(self.comm_actors)
+        self.entities.extend(self.comm_actors_target)
+        self.entities.extend(self.comm_actors_optim)
+
+        # communication critics   
+        self.comm_critics = []
+        self.comm_critics_target = []
+        self.comm_critics_optim = []
+        
+        for i in range(1):
+            self.comm_critics.append(Comm_Critic(observation_space*num_agents, medium_space).to(device))
+            self.comm_critics_target.append(Comm_Critic(observation_space*num_agents, medium_space).to(device))
+            self.comm_critics_optim.append(optimizer(self.comm_critics[i].parameters(), lr = critic_lr))
+
+        for i in range(1):
+            hard_update(self.comm_critics_target[i], self.comm_critics[i]) 
+
+    def select_comm_action(self, state, exploration=False):
+        self.comm_actors[0].eval()
+        with K.no_grad():
+            mu = self.comm_actors[0](state.to(self.device))
+        self.actors[0].train()
+        if self.discrete:
+            mu = gumbel_softmax(mu, exploration=exploration)
+        else:
+            if exploration:
+                mu += K.tensor(exploration.noise(), dtype=self.dtype, device=self.device)
+        
+        mu = mu.clamp(-1, 1)
+
+        return mu
+
+    def update_parameters(self, batch, batch2, i_agent):
+        
+        mask = K.tensor(tuple(map(lambda s: s is not None, batch.next_state)), dtype=K.uint8, device=self.device)
+
+        V = K.zeros((len(batch.state), 1), device=self.device)
+
+        s = K.cat(batch.state, dim=1).to(self.device)
+        a = K.cat(batch.action, dim=1).to(self.device)
+        r = K.cat(batch.reward, dim=1).to(self.device)
+        s_ = K.cat([i.to(self.device) for i in batch.next_state if i is not None], dim=1)
+        a_ = K.zeros_like(a)[:,0:s_.shape[1],]
+        
+        m = K.cat(batch.medium, dim=1).to(self.device)
+
+        if self.normalized_rewards:
+            r -= r.mean()
+            r /= r.std()
+
+        Q = self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1),
+                                  a[[i_agent],])
+        
+        for i in range(self.num_agents):
+            a_[i,] = self.actors_target[i](K.cat([s_[[i],], m], dim=-1))
+
+        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m], dim=-1),
+                                               a_[[i_agent],]).detach()
+
+        loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0)) 
+
+        self.critics_optim[i_agent].zero_grad()
+        loss_critic.backward()
+        K.nn.utils.clip_grad_norm_(self.critics[i_agent].parameters(), 0.5)
+        self.critics_optim[i_agent].step()
+
+        for i in range(self.num_agents):
+            a[i,] = self.actors[i](K.cat([s[[i],], m], dim=-1))
+
+        loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1), 
+                                            a[[i_agent],]).mean()
+        
+        if self.regularization:
+            loss_actor += (self.actors[i_agent].get_preactivations(K.cat([s[[i_agent],], m], dim=-1))**2).mean()*1e-3
+
+        self.actors_optim[i_agent].zero_grad()        
+        loss_actor.backward()
+        K.nn.utils.clip_grad_norm_(self.actors[i_agent].parameters(), 0.5)
+        self.actors_optim[i_agent].step()
+
+        soft_update(self.actors_target[i_agent], self.actors[i_agent], self.tau)
+        soft_update(self.critics_target[i_agent], self.critics[i_agent], self.tau)
+
+        if i_agent == 2:
+
+            mask = K.tensor(tuple(map(lambda s: s is not None, batch2.next_state)), dtype=K.uint8, device=self.device)
+            V = K.zeros((len(batch2.state), 1), device=self.device)
+
+            s = K.cat(batch2.state, dim=1).to(self.device)
+            r = K.cat(batch2.reward, dim=1).to(self.device)
+            s_ = K.cat([i.to(self.device) for i in batch2.next_state if i is not None], dim=1)
+            
+            m = K.cat(batch2.medium, dim=1).to(self.device)
+            m_ = K.zeros_like(m)[:,0:s_.shape[1],]
+            
+            if self.normalized_rewards:
+                r -= r.mean()
+                r /= r.std()
+
+            Q = self.comm_critics[0](s, m)
+
+            m_ = self.comm_actors_target[0](s_).unsqueeze(0)
+
+            V[mask] = self.comm_critics_target[0](s_, m_).detach()
+
+            loss_critic = self.loss_func(Q, (V * self.gamma) + r[[0],].squeeze(0)) 
+
+            self.comm_critics_optim[0].zero_grad()
+            loss_critic.backward()
+            K.nn.utils.clip_grad_norm_(self.comm_critics[0].parameters(), 0.5)
+            self.comm_critics_optim[0].step()
+
+            m = self.comm_actors[0](s).unsqueeze(0)
+
+            loss_actor = -self.comm_critics[0](s, m).mean()
+            
+            if self.regularization:
+                loss_actor += (self.comm_actors[0].get_preactivations(s)**2).mean()*1e-3
+
+            self.comm_actors_optim[0].zero_grad()        
+            loss_actor.backward()
+            K.nn.utils.clip_grad_norm_(self.comm_actors[0].parameters(), 0.5)
+            self.comm_actors_optim[0].step()
+
+            soft_update(self.comm_actors_target[0], self.comm_actors[0], self.tau)
+            soft_update(self.comm_critics_target[0], self.comm_critics[0], self.tau)
+
+        
+        return loss_critic.item(), loss_actor.item()
+
+
+class MAHCDDPG_Disc(MADDPG):
+    def __init__(self, num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func=F.sigmoid,
+                 discrete=True, regularization=False, normalized_rewards=False, communication=None, Comm_Actor=None, Comm_Critic=None, dtype=K.float32, device="cuda"):
+        
+        super().__init__(num_agents, observation_space, action_space, medium_space, optimizer, Actor, Critic, loss_func, gamma, tau, out_func,
+                         discrete, regularization, normalized_rewards, communication, Comm_Actor, Comm_Critic, dtype, device)
+
+        optimizer, lr = optimizer
+        actor_lr, critic_lr = lr
+
+        # model initialization
+        self.entities = []
+        
+        # actors
+        self.actors = []
+        self.actors_target = []
+        self.actors_optim = []
+        
+        for i in range(num_agents):
+            self.actors.append(Actor(observation_space+medium_space, action_space, discrete, out_func).to(device))
+            self.actors_target.append(Actor(observation_space+medium_space, action_space, discrete, out_func).to(device))
+            self.actors_optim.append(optimizer(self.actors[i].parameters(), actor_lr))
+
+        for i in range(num_agents):
+            hard_update(self.actors_target[i], self.actors[i])
+
+        self.entities.extend(self.actors)
+        self.entities.extend(self.actors_target)
+        self.entities.extend(self.actors_optim) 
+        
+        # critics   
+        self.critics = []
+        self.critics_target = []
+        self.critics_optim = []
+        
+        for i in range(num_agents):
+            self.critics.append(Critic(observation_space+medium_space, action_space).to(device))
+            self.critics_target.append(Critic(observation_space+medium_space, action_space).to(device))
+            self.critics_optim.append(optimizer(self.critics[i].parameters(), lr = critic_lr))
+
+        for i in range(num_agents):
+            hard_update(self.critics_target[i], self.critics[i])
+            
+        self.entities.extend(self.critics)
+        self.entities.extend(self.critics_target)
+        self.entities.extend(self.critics_optim)    
+
+        # communication actors
+        self.comm_actors = []
+        self.comm_actors_target = []
+        self.comm_actors_optim = []
+        
+        for i in range(1):
+            self.comm_actors.append(Comm_Actor(observation_space*num_agents, num_agents, True, 'linear').to(device))
+            self.comm_actors_target.append(Comm_Actor(observation_space*num_agents, num_agents, True, 'linear').to(device))
+            self.comm_actors_optim.append(optimizer(self.comm_actors[i].parameters(), lr = actor_lr))
+            
+        for i in range(1):
+            hard_update(self.comm_actors_target[i], self.comm_actors[i])
+
+        self.entities.extend(self.comm_actors)
+        self.entities.extend(self.comm_actors_target)
+        self.entities.extend(self.comm_actors_optim)
+
+        # communication critics   
+        self.comm_critics = []
+        self.comm_critics_target = []
+        self.comm_critics_optim = []
+        
+        for i in range(1):
+            self.comm_critics.append(Comm_Critic(observation_space*num_agents, num_agents).to(device))
+            self.comm_critics_target.append(Comm_Critic(observation_space*num_agents, num_agents).to(device))
+            self.comm_critics_optim.append(optimizer(self.comm_critics[i].parameters(), lr = critic_lr))
+
+        for i in range(1):
+            hard_update(self.comm_critics_target[i], self.comm_critics[i]) 
+
+        # for test purposes, otherwise comment these 6 lines
+        #self.critics[0] = K.load('critic_0.pt')
+        #self.critics[1] = K.load('critic_1.pt')
+        #self.critics[2] = K.load('critic_2.pt')
+
+        #self.actors[0] = K.load('actor_0.pt')
+        #self.actors[1] = K.load('actor_1.pt')
+        #self.actors[2] = K.load('actor_2.pt')
+
+    def select_comm_action(self, state, exploration=False):
+        self.comm_actors[0].eval()
+        with K.no_grad():
+            mu = self.comm_actors[0](state.to(self.device))
+        self.actors[0].train()
+        mu = gumbel_softmax(mu, exploration=exploration)
+        return mu
+
+    def update_parameters(self, batch, batch2, i_agent):
+        
+        mask = K.tensor(tuple(map(lambda s: s is not None, batch.next_state)), dtype=K.uint8, device=self.device)
+
+        V = K.zeros((len(batch.state), 1), device=self.device)
+
+        s = K.cat(batch.state, dim=1).to(self.device)
+        a = K.cat(batch.action, dim=1).to(self.device)
+        r = K.cat(batch.reward, dim=1).to(self.device)
+        s_ = K.cat([i.to(self.device) for i in batch.next_state if i is not None], dim=1)
+        a_ = K.zeros_like(a)[:,0:s_.shape[1],]
+        
+        m = K.cat(batch.medium, dim=1).to(self.device)
+
+        if self.normalized_rewards:
+            r -= r.mean()
+            r /= r.std()
+
+        Q = self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1),
+                                  a[[i_agent],])
+        
+        for i in range(self.num_agents):
+            a_[i,] = self.actors_target[i](K.cat([s_[[i],], m[:,mask,]], dim=-1))
+
+        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m[:,mask,]], dim=-1),
+                                               a_[[i_agent],]).detach()
+
+        loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0)) 
+
+        self.critics_optim[i_agent].zero_grad()
+        loss_critic.backward()
+        K.nn.utils.clip_grad_norm_(self.critics[i_agent].parameters(), 0.5)
+        self.critics_optim[i_agent].step()
+
+        for i in range(self.num_agents):
+            a[i,] = self.actors[i](K.cat([s[[i],], m], dim=-1))
+
+        loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1), 
+                                            a[[i_agent],]).mean()
+        
+        if self.regularization:
+            loss_actor += (self.actors[i_agent].get_preactivations(K.cat([s[[i_agent],], m], dim=-1))**2).mean()*1e-3
+
+        self.actors_optim[i_agent].zero_grad()        
+        loss_actor.backward()
+        K.nn.utils.clip_grad_norm_(self.actors[i_agent].parameters(), 0.5)
+        self.actors_optim[i_agent].step()
+
+        soft_update(self.actors_target[i_agent], self.actors[i_agent], self.tau)
+        soft_update(self.critics_target[i_agent], self.critics[i_agent], self.tau)
+
+        if i_agent == 2:
+
+            mask = K.tensor(tuple(map(lambda s: s is not None, batch2.next_state)), dtype=K.uint8, device=self.device)
+            V = K.zeros((len(batch2.state), 1), device=self.device)
+
+            s = K.cat(batch2.state, dim=1).to(self.device)
+            r = K.cat(batch2.reward, dim=1).to(self.device)
+            s_ = K.cat([i.to(self.device) for i in batch2.next_state if i is not None], dim=1)
+            
+            c = K.cat(batch2.comm_action, dim=1).to(self.device)
+            c_ = K.zeros_like(c)[:,0:s_.shape[1],]
+            
+            if self.normalized_rewards:
+                r -= r.mean()
+                r /= r.std()
+
+            Q = self.comm_critics[0](s, c)
+
+            c_ = gumbel_softmax(self.comm_actors_target[0](s_), exploration=False).unsqueeze(0)
+
+            V[mask] = self.comm_critics_target[0](s_, c_).detach()
+
+            loss_critic = self.loss_func(Q, (V * self.gamma) + r[[0],].squeeze(0)) 
+
+            self.comm_critics_optim[0].zero_grad()
+            loss_critic.backward()
+            K.nn.utils.clip_grad_norm_(self.comm_critics[0].parameters(), 0.5)
+            self.comm_critics_optim[0].step()
+
+            c = gumbel_softmax(self.comm_actors[0](s), exploration=False).unsqueeze(0)
+
+            loss_actor = -self.comm_critics[0](s, c).mean()
+            
+            if self.regularization:
+                loss_actor += (self.comm_actors[0].get_preactivations(s)**2).mean()*1e-3
+
+            self.comm_actors_optim[0].zero_grad()        
+            loss_actor.backward()
+            K.nn.utils.clip_grad_norm_(self.comm_actors[0].parameters(), 0.5)
+            self.comm_actors_optim[0].step()
+
+            soft_update(self.comm_actors_target[0], self.comm_actors[0], self.tau)
+            soft_update(self.comm_critics_target[0], self.comm_critics[0], self.tau)
+
+        
+        return loss_critic.item(), loss_actor.item()
+

@@ -127,7 +127,8 @@ def get_params(args=[], verbose=False):
                         choices=['MACDDPG', 'MADDPG', 'DDPG', 'ORACLE', 
                         'MACCDDPG', 'MADCDDPG', 
                         'MSDDPG', 'MS3DDPG', 
-                        'MADCDDPG_WS', 'MADCDDPG_WSC'])
+                        'MADCDDPG_WS', 'MADCDDPG_WSC', 'MADCDDPG_v2', 'MADCDDPG_MS', 'MADCDDPG_Trained',
+                        'MAMDDPG', 'MAHCDDPG', 'MAHCDDPG_Disc'])
     parser.add_argument("--device", default='cuda',
                         choices=['cpu','cuda'], 
                         help="device type")

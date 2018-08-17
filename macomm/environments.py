@@ -26,20 +26,20 @@ class communication(object):
         if (comm_actions>0.5).sum().item() == 0: # channel stays idle
             comm_rewards -= 1
             if self.medium_type is 'obs_only':
-                medium = K.cat([K.zeros_like(observations[[0], ]), K.zeros((1,1,1), dtype=observations.dtype)], dim=-1)
+                medium = K.cat([K.rand_like(observations[[0], ]), K.zeros((1,1,1), dtype=observations.dtype)], dim=-1)
             else:
-                medium = K.cat([K.zeros_like(observations[[0], ]),
-                                K.zeros_like(prev_actions[[0], ]),
+                medium = K.cat([K.rand_like(observations[[0], ]),
+                                K.rand_like(prev_actions[[0], ]),
                                 K.zeros((1,1,1), dtype=observations.dtype)
                                 ], dim=-1)
         elif (comm_actions>0.5).sum().item() > 1: # collision
             comm_rewards[comm_actions>0.5] -= 1
             if self.medium_type is 'obs_only':
-                medium = K.cat([K.zeros_like(observations[[0], ]), 
+                medium = K.cat([K.rand_like(observations[[0], ]), 
                                 (self.num_agents+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
             else:
-                medium = K.cat([K.zeros_like(observations[[0], ]),
-                                K.zeros_like(prev_actions[[0], ]), 
+                medium = K.cat([K.rand_like(observations[[0], ]),
+                                K.rand_like(prev_actions[[0], ]), 
                                 (self.num_agents+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
         else:                                     # success
             granted_agent = K.argmax((comm_actions>0.5)).item()
@@ -83,10 +83,10 @@ class communication(object):
         #                    dtype=observations.dtype, device=observations.device)
 
         if self.medium_type is 'obs_only':
-            medium = K.zeros((1, observations.shape[1], observations.shape[2]+1), 
+            medium = K.rand((1, observations.shape[1], observations.shape[2]+1), 
                             dtype=observations.dtype, device=observations.device)
         else:
-            medium = K.zeros((1, observations.shape[1], observations.shape[2]+prev_actions.shape[2]+1), 
+            medium = K.rand((1, observations.shape[1], observations.shape[2]+prev_actions.shape[2]+1), 
                             dtype=observations.dtype, device=observations.device)           
 
 
@@ -108,7 +108,7 @@ class communication(object):
         if K.is_nonzero(((comm_actions>0.5).sum(dim=0) == 0)[:,0].sum()):
             #comm_rewards[:,((comm_actions>0.5).sum(dim=0) == 0)[:,0],:] = -1
             if self.medium_type is 'obs_only':
-                medium[:,((comm_actions>0.5).sum(dim=0) == 0)[:,0], :] = K.cat([K.zeros((1,1,observations.shape[2]),
+                medium[:,((comm_actions>0.5).sum(dim=0) == 0)[:,0], :] = K.cat([K.rand((1,1,observations.shape[2]),
                                                                                         dtype=observations.dtype, 
                                                                                         device=observations.device),
                                                                                 K.zeros((1,1,1), 
@@ -116,7 +116,7 @@ class communication(object):
                                                                                         device=observations.device)], 
                                                                             dim=-1)
             else:
-                medium[:,((comm_actions>0.5).sum(dim=0) == 0)[:,0], :] = K.cat([K.zeros((1,1,observations.shape[2]),
+                medium[:,((comm_actions>0.5).sum(dim=0) == 0)[:,0], :] = K.cat([K.rand((1,1,observations.shape[2]),
                                                                                         dtype=observations.dtype, 
                                                                                         device=observations.device),
                                                                                 K.zeros((1,1,prev_actions.shape[2]),

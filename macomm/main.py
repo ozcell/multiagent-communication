@@ -8,7 +8,8 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from macomm.algorithms import MADDPG, MACDDPG, DDPG, ORACLE, MACCDDPG, MADCDDPG, MSDDPG, MS3DDPG, MADCDDPG_WS, MADCDDPG_WSC
+from macomm.algorithms import MADDPG, MACDDPG, DDPG, ORACLE, MACCDDPG, MADCDDPG, MSDDPG
+from macomm.algorithms import MS3DDPG, MADCDDPG_WS, MADCDDPG_WSC, MADCDDPG_v2, MADCDDPG_MS, MADCDDPG_Trained, MAMDDPG, MAHCDDPG, MAHCDDPG_Disc
 from macomm.environments import communication, communication_v2, make_env_cont
 from macomm.experience import ReplayMemory, ReplayMemoryComm, Transition, Transition_Comm, ReplayMemoryCommLstm, Transition_Comm_Lstm
 from macomm.exploration import OUNoise
@@ -95,7 +96,8 @@ def init(config):
         action_space = env.action_space[0].n
         OUT_FUNC = F.sigmoid
 
-    if config['agent_alg'] == 'MSDDPG' or config['agent_alg'] == 'MS3DDPG':
+    if (config['agent_alg'] == 'MSDDPG' or config['agent_alg'] == 'MS3DDPG' or  
+        config['agent_alg'] == 'MAMDDPG' or config['agent_alg'] == 'MAHCDDPG_Disc'):
         if config['medium_type'] == 'obs_only':
             medium_space = observation_space
         elif config['medium_type'] == 'obs_act':
@@ -140,6 +142,28 @@ def init(config):
                                  consecuitive_limit=CONS_LIM, 
                                  num_agents=num_agents,
                                  medium_type=config['medium_type'])
+    elif config['agent_alg'] == 'MADCDDPG_v2':
+        MODEL = MADCDDPG_v2
+        comm_env = communication(protocol_type=PROTOCOL, 
+                                 consecuitive_limit=CONS_LIM, 
+                                 num_agents=num_agents,
+                                 medium_type=config['medium_type'])
+    elif config['agent_alg'] == 'MADCDDPG_MS':
+        MODEL = MADCDDPG_MS
+        comm_env = communication(protocol_type=PROTOCOL, 
+                                 consecuitive_limit=CONS_LIM, 
+                                 num_agents=num_agents,
+                                 medium_type=config['medium_type'])
+    elif config['agent_alg'] == 'MADCDDPG_Trained':
+        MODEL = MADCDDPG_Trained
+        comm_env = communication(protocol_type=PROTOCOL, 
+                                 consecuitive_limit=CONS_LIM, 
+                                 num_agents=num_agents,
+                                 medium_type=config['medium_type'])
+    elif config['agent_alg'] == 'MAMDDPG':
+        MODEL = MAMDDPG
+        from macomm.agents.basic import Medium
+        comm_env = Medium
     elif config['agent_alg'] == 'MADDPG':
         MODEL = MADDPG
         comm_env = None
@@ -154,6 +178,12 @@ def init(config):
         comm_env = None
     elif config['agent_alg'] == 'MS3DDPG':
         MODEL = MS3DDPG
+        comm_env = None
+    elif config['agent_alg'] == 'MAHCDDPG':
+        MODEL = MAHCDDPG
+        comm_env = None
+    elif config['agent_alg'] == 'MAHCDDPG_Disc':
+        MODEL = MAHCDDPG_Disc
         comm_env = None
         
 
@@ -205,6 +235,8 @@ def init(config):
             memory = ReplayMemoryCommLstm(MEM_SIZE)
         else:
             memory = ReplayMemoryComm(MEM_SIZE)
+    elif config['agent_alg'] == 'MAHCDDPG' or config['agent_alg'] == 'MAHCDDPG_Disc':
+        memory = [ReplayMemoryComm(MEM_SIZE), ReplayMemoryComm(MEM_SIZE)]
     else:
         memory = ReplayMemory(MEM_SIZE)
         
@@ -239,6 +271,7 @@ def run(model, experiment_args, train=True):
         observations = np.stack(env.reset())
         observations = K.tensor(observations, dtype=K.float32).unsqueeze(1)
         #comm_env.reset()
+        prev_medium = K.zeros((1, observations.shape[1], observations.shape[2]+1), dtype=observations.dtype, device=observations.device)
         prev_actions = K.zeros((model.num_agents, 1, model.action_space))
 
         episode_rewards = np.zeros((model.num_agents,1,1))
@@ -268,7 +301,10 @@ def run(model, experiment_args, train=True):
                         #comm_context = model.comm_actors[i].get_h()
                         comm_contexts.append(comm_context)
 
-                    comm_action = model.select_comm_action(observations[[i], ], i, comm_ounoise if train else False)
+                    if config['agent_alg'] == 'MADCDDPG_v2': 
+                        comm_action = model.select_comm_action(K.cat([observations[[i], ], prev_medium], dim=-1), i, comm_ounoise if train else False)
+                    else:    
+                        comm_action = model.select_comm_action(observations[[i], ], i, comm_ounoise if train else False)
                     comm_actions.append(comm_action)
 
                     if config['comm_agent_type'] == 'lstm':
@@ -282,6 +318,8 @@ def run(model, experiment_args, train=True):
                     next_comm_contexts = K.stack(next_comm_contexts).cpu()
                 
                 medium, comm_rewards = comm_env.step(observations, comm_actions, prev_actions)
+                ## do not forget to delete this line
+                #medium = K.cat([observations[[env.world.leader], ], (env.world.leader+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
                 medium = K.tensor(medium, dtype=K.float32)
                 comm_rewards = K.tensor(comm_rewards, dtype=dtype).view(-1,1,1)
                 episode_comm_rewards += comm_rewards 
@@ -318,12 +356,16 @@ def run(model, experiment_args, train=True):
             next_observations, rewards, dones, infos = env.step(actions.squeeze(1))
             next_observations = K.tensor(next_observations, dtype=K.float32).unsqueeze(1)
             rewards = K.tensor(rewards, dtype=dtype).view(-1,1,1)
-            episode_rewards += rewards      
+            episode_rewards += rewards
+            prev_medium = medium
+            ## do not forget to delete these two lines
+            #prev_medium = K.cat([next_observations[[env.world.leader], ], (env.world.leader+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
+            #prev_medium = K.tensor(prev_medium, dtype=K.float32)     
 
             # if it is the last step we don't need next obs
-            if i_step == EPISODE_LENGTH-1:
-                next_observations = None
-                next_comm_contexts = None
+            #if i_step == EPISODE_LENGTH-1:
+            #    next_observations = None
+            #    next_comm_contexts = None
 
             # Store the transition in memory
             if train:
@@ -331,7 +373,7 @@ def run(model, experiment_args, train=True):
                     if config['comm_agent_type'] == 'lstm':
                         memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, comm_contexts, next_comm_contexts, prev_actions)
                     else:
-                        memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, prev_actions)
+                        memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, prev_actions, prev_medium)
                 else:
                     memory.push(observations, actions, next_observations, rewards)
 
@@ -452,6 +494,403 @@ def run(model, experiment_args, train=True):
         print('Test completed')
     
     return (episode_rewards_all, episode_comm_rewards_all)
+
+
+def run2(model, experiment_args, train=True):
+
+    total_time_start =  time.time()
+
+    env, comm_env, memory, ounoise, comm_ounoise, config, summaries, saver, start_episode = experiment_args
+    
+    start_episode = start_episode if train else 0
+    NUM_EPISODES = config['n_episodes'] if train else config['n_episodes_test'] 
+    EPISODE_LENGTH = config['episode_length'] if train else config['episode_length_test'] 
+    
+    reward_best = float("-inf")
+    avg_reward_best = float("-inf")
+    
+    t = 0
+    episode_rewards_all = []
+    episode_comm_rewards_all = []
+        
+    for i_episode in range(start_episode, NUM_EPISODES):
+        
+        episode_time_start = time.time()
+        
+        frames = []
+        
+        # Initialize the environment and state
+        observations = np.stack(env.reset())
+        observations = K.tensor(observations, dtype=K.float32).unsqueeze(1)
+
+        episode_rewards = np.zeros((model.num_agents,1,1))
+        episode_comm_rewards = np.zeros((model.num_agents,1,1))
+        
+        ounoise.scale = get_noise_scale(i_episode, config)
+        comm_ounoise.scale = get_noise_scale(i_episode, config)
+
+        num_comm_agents = 1 if config['agent_alg'] == 'MADCDDPG_WSC' else model.num_agents
+
+        if model.communication is not None and config['comm_agent_type'] == 'lstm':
+            for i in range(num_comm_agents):
+                model.comm_actors[i].init()
+
+        for i_step in range(EPISODE_LENGTH):
+
+            model.to_cpu()
+            with K.no_grad():
+                medium = model.mediums[0].get_m(observations).unsqueeze(0)
+            #medium = K.tensor(medium, dtype=K.float32)
+            actions = []
+            for i in range(model.num_agents):
+                action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, ounoise if train else False)
+                actions.append(action)
+            actions = K.stack(actions).cpu()
+
+            next_observations, rewards, dones, infos = env.step(actions.squeeze(1))
+            next_observations = K.tensor(next_observations, dtype=K.float32).unsqueeze(1)
+            rewards = K.tensor(rewards, dtype=dtype).view(-1,1,1)
+            episode_rewards += rewards
+
+            # if it is the last step we don't need next obs
+            if i_step == EPISODE_LENGTH-1:
+                next_observations = None
+                next_comm_contexts = None
+
+            # Store the transition in memory
+            if train:
+                memory.push(observations, actions, next_observations, rewards, medium, None, None, None, None)
+
+            # Move to the next state
+            observations = next_observations
+            t += 1
+            
+            # Use experience replay and train the model
+            critic_losses = None
+            actor_losses = None
+            if train:
+                if len(memory) > config['batch_size']-1 and t%config['steps_per_update'] == 0:
+                    critic_losses = []
+                    actor_losses = []                  
+                    for i in range(env.n):
+                        batch = Transition_Comm(*zip(*memory.sample(config['batch_size'])))
+                        model.to_cuda()
+                        medium_loss = model.update_ae(batch)
+                        critic_loss, actor_loss = model.update_parameters(batch, i)
+                        critic_losses.append(critic_loss)
+                        actor_losses.append(actor_loss)                    
+
+            # Record frames
+            if config['render'] > 0 and i_episode % config['render'] == 0:
+                if config['env_id'] == 'waterworld':
+                    frames.append(sc.misc.imresize(env.render(), (300, 300)))
+                else:
+                    frames.append(env.render(mode='rgb_array')[0])  
+
+        # <-- end loop: i_step 
+        
+        ### MONITORIRNG ###
+
+        episode_rewards_all.append(episode_rewards.sum())
+        episode_comm_rewards_all.append(episode_comm_rewards.sum())
+        if config['verbose'] > 0:
+        # Printing out
+            if (i_episode+1)%100 == 0:
+                print("==> Episode {} of {}".format(i_episode + 1, NUM_EPISODES))
+                print('  | Id exp: {}'.format(config['exp_id']))
+                print('  | Exp description: {}'.format(config['exp_descr']))
+                print('  | Env: {}'.format(config['env_id']))
+                print('  | Process pid: {}'.format(config['process_pid']))
+                print('  | Tensorboard port: {}'.format(config['port']))
+                print('  | Episode total reward: {}'.format(episode_rewards.sum()))
+                print('  | Running mean of total reward: {}'.format(running_mean(episode_rewards_all)[-1]))
+                print('  | Running mean of total comm_reward: {}'.format(running_mean(episode_comm_rewards_all)[-1]))
+                print('  | Time episode: {}'.format(time.time()-episode_time_start))
+                print('  | Time total: {}'.format(time.time()-total_time_start))
+                if train:
+                    print('  | Medium loss: {}'.format(medium_loss))
+            
+        if config['verbose'] > 1:
+            # Best reward so far?
+            if episode_rewards.sum() >= reward_best:
+                reward_best = episode_rewards.sum()
+                is_best = True
+            else:
+                is_best = False
+            # Best average reward so far?
+            if (i_episode > 100) and running_mean(episode_rewards_all)[-1] > avg_reward_best:
+                avg_reward_best = running_mean(episode_rewards_all)[-1]
+                is_best_avg = True 
+            else:
+                is_best_avg = False
+                        
+        if config['verbose'] > 0:    
+            # Update logs and save model
+            #ep_save = i_episode+1 if (i_episode % config['save_epochs'] == 0 or i_episode == NUM_EPISODES-1) else None
+            #is_best_save = reward_best if is_best else None
+            #is_best_avg_save = avg_reward_best if is_best_avg else None   
+            ep_save = i_episode+1 if (i_episode == NUM_EPISODES-1) else None  
+            is_best_save = None
+            is_best_avg_save = None   
+                
+            if (not train) or ((np.asarray([ep_save, is_best_save, is_best_avg_save]) == None).sum() == 3):
+                to_save = False
+            else:
+                model.to_cpu()
+                saver.save_checkpoint(save_dict   = {'model_params': [entity.state_dict() for entity in model.entities]},
+                                      episode     = ep_save,
+                                      is_best     = is_best_save,
+                                      is_best_avg = is_best_avg_save
+                                      )
+                to_save = True
+            
+            #if (np.asarray([ep_save, is_best_save, is_best_avg_save]) == None).sum() != 3:
+    
+            if (i_episode+1)%100 == 0:
+                summary = summaries[0] if train else summaries[1]
+                summary.update_log(i_episode, 
+                                episode_rewards.sum(), 
+                                list(episode_rewards.reshape(-1,)), 
+                                critic_loss        = critic_losses, 
+                                actor_loss         = actor_losses,
+                                to_save            = to_save, 
+                                comm_reward_total  = episode_comm_rewards.sum(),
+                                comm_reward_agents = list(episode_comm_rewards.reshape(-1,))
+                                )
+        
+
+        # Save gif
+        dir_monitor = config['dir_monitor_train'] if train else config['dir_monitor_test']
+        if config['render'] > 0 and i_episode % config['render'] == 0:
+            if config['env_id'] == 'waterworld':
+                imageio.mimsave('{}/{}.gif'.format(dir_monitor, i_episode), frames[0::3])
+            else:
+                imageio.mimsave('{}/{}.gif'.format(dir_monitor, i_episode), frames)
+            
+    # <-- end loop: i_episode
+    if train:
+        print('Training completed')
+    else:
+        print('Test completed')
+    
+    return (episode_rewards_all, episode_comm_rewards_all)
+
+
+def intrinsic_reward(env, medium):
+    # Agents are rewarded based on minimum agent distance to each landmark, penalized for collisions
+    rew_all = []
+    landmarks = medium.reshape(-1,)[4:10].reshape(-1,2)
+    medium_p_state = medium.reshape(-1,)[2:4].reshape(-1,2)
+    for agent in env.agents:
+        rew = 0
+        for i in range(env.n):
+            dists = [np.sqrt(np.sum(np.square(a.state.p_pos - (landmarks[i] + medium_p_state)))) for a in env.agents]
+            rew -= min(dists)
+        if agent.collide:
+            for a in env.agents:
+                if is_collision(a, agent):
+                    rew -= 1
+        rew_all.append(rew)
+    return rew_all
+
+def is_collision(agent1, agent2):
+        delta_pos = agent1.state.p_pos - agent2.state.p_pos
+        dist = np.sqrt(np.sum(np.square(delta_pos)))
+        dist_min = agent1.size + agent2.size
+        return True if dist < dist_min else False
+
+
+def run3(model, experiment_args, train=True):
+
+    total_time_start =  time.time()
+
+    env, comm_env, memory, ounoise, comm_ounoise, config, summaries, saver, start_episode = experiment_args
+    
+    start_episode = start_episode if train else 0
+    NUM_EPISODES = config['n_episodes'] if train else config['n_episodes_test'] 
+    EPISODE_LENGTH = config['episode_length'] if train else config['episode_length_test'] 
+    
+    reward_best = float("-inf")
+    avg_reward_best = float("-inf")
+    
+    t = 0
+    episode_rewards_all = []
+    episode_comm_rewards_all = []
+        
+    for i_episode in range(start_episode, NUM_EPISODES):
+        
+        episode_time_start = time.time()
+        
+        frames = []
+        
+        # Initialize the environment and state
+        observations = np.stack(env.reset())
+        observations = K.tensor(observations, dtype=K.float32).unsqueeze(1)
+
+        episode_rewards = np.zeros((model.num_agents,1,1))
+        episode_comm_rewards = np.zeros((model.num_agents,1,1))
+        
+        ounoise.scale = get_noise_scale(i_episode, config)
+        comm_ounoise.scale = get_noise_scale(i_episode, config)
+
+        for i_step in range(EPISODE_LENGTH):
+
+            model.to_cpu()
+
+            if i_step % 5 == 0:
+                observations_init = observations.clone()
+                cumm_rewards = K.zeros((model.num_agents,1,1), dtype=dtype)
+                if config['agent_alg'] == 'MAHCDDPG_Disc':
+                    medium = model.select_comm_action(observations_init, True if train else False).unsqueeze(0)
+                    comm_actions = medium
+                    medium = observations_init[K.tensor(comm_actions, dtype=K.uint8)[0,0,]]
+                    # for test purposes, otherwise comment these two lines
+                    #granted_agent = K.argmax(comm_actions).item()
+                    #medium = K.cat([medium, (granted_agent+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
+                else:
+                    medium = model.select_comm_action(observations_init, comm_ounoise if train else False).unsqueeze(0)
+                    comm_actions = None
+                    #medium = model.comm_actors[0](observations_init).unsqueeze(0)
+                #medium = K.tensor(medium, dtype=K.float32)
+
+            actions = []
+            for i in range(model.num_agents):
+                action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, ounoise if train else False)
+                actions.append(action)
+            actions = K.stack(actions).cpu()
+
+            next_observations, rewards, dones, infos = env.step(actions.squeeze(1))
+            next_observations = K.tensor(next_observations, dtype=dtype).unsqueeze(1)
+            rewards = K.tensor(rewards, dtype=dtype).view(-1,1,1)
+            intr_rewards = intrinsic_reward(env, medium.numpy())
+            intr_rewards = K.tensor(intr_rewards, dtype=dtype).view(-1,1,1)
+            episode_rewards += rewards
+            cumm_rewards += rewards
+            episode_comm_rewards += intr_rewards
+            # if it is the last step we don't need next obs
+            if i_step == EPISODE_LENGTH-1:
+                next_observations = None
+                next_comm_contexts = None
+
+            # Store the transition in memory
+            if train:
+                memory[0].push(observations, actions, next_observations, rewards, medium, None, None, None, None)
+                if i_step % 5 == 4:
+                    memory[1].push(observations_init, None, next_observations, cumm_rewards, medium, comm_actions, None, None, None)
+
+            # Move to the next state
+            observations = next_observations
+            t += 1
+            
+            # Use experience replay and train the model
+            critic_losses = None
+            actor_losses = None
+            if train:
+                if (len(memory[0]) > config['batch_size']-1 and len(memory[1]) > config['batch_size']-1 
+                    and t%config['steps_per_update'] == 0):
+                    critic_losses = []
+                    actor_losses = []                  
+                    for i in range(env.n):
+                        batch = Transition_Comm(*zip(*memory[0].sample(config['batch_size'])))
+                        batch2 = Transition_Comm(*zip(*memory[1].sample(config['batch_size'])))
+                        model.to_cuda()
+                        critic_loss, actor_loss = model.update_parameters(batch, batch2, i)
+                        critic_losses.append(critic_loss)
+                        actor_losses.append(actor_loss)
+                        
+            # Record frames
+            if config['render'] > 0 and i_episode % config['render'] == 0:
+                if config['env_id'] == 'waterworld':
+                    frames.append(sc.misc.imresize(env.render(), (300, 300)))
+                else:
+                    frames.append(env.render(mode='rgb_array')[0])  
+
+        # <-- end loop: i_step 
+        
+        ### MONITORIRNG ###
+
+        episode_rewards_all.append(episode_rewards.sum())
+        episode_comm_rewards_all.append(episode_comm_rewards.sum())
+        if config['verbose'] > 0:
+        # Printing out
+            if (i_episode+1)%100 == 0:
+                print("==> Episode {} of {}".format(i_episode + 1, NUM_EPISODES))
+                print('  | Id exp: {}'.format(config['exp_id']))
+                print('  | Exp description: {}'.format(config['exp_descr']))
+                print('  | Env: {}'.format(config['env_id']))
+                print('  | Process pid: {}'.format(config['process_pid']))
+                print('  | Tensorboard port: {}'.format(config['port']))
+                print('  | Episode total reward: {}'.format(episode_rewards.sum()))
+                print('  | Running mean of total reward: {}'.format(running_mean(episode_rewards_all)[-1]))
+                print('  | Running mean of total comm_reward: {}'.format(running_mean(episode_comm_rewards_all)[-1]))
+                print('  | Time episode: {}'.format(time.time()-episode_time_start))
+                print('  | Time total: {}'.format(time.time()-total_time_start))
+            
+        if config['verbose'] > 1:
+            # Best reward so far?
+            if episode_rewards.sum() >= reward_best:
+                reward_best = episode_rewards.sum()
+                is_best = True
+            else:
+                is_best = False
+            # Best average reward so far?
+            if (i_episode > 100) and running_mean(episode_rewards_all)[-1] > avg_reward_best:
+                avg_reward_best = running_mean(episode_rewards_all)[-1]
+                is_best_avg = True 
+            else:
+                is_best_avg = False
+                        
+        if config['verbose'] > 0:    
+            # Update logs and save model
+            #ep_save = i_episode+1 if (i_episode % config['save_epochs'] == 0 or i_episode == NUM_EPISODES-1) else None
+            #is_best_save = reward_best if is_best else None
+            #is_best_avg_save = avg_reward_best if is_best_avg else None   
+            ep_save = i_episode+1 if (i_episode == NUM_EPISODES-1) else None  
+            is_best_save = None
+            is_best_avg_save = None   
+                
+            if (not train) or ((np.asarray([ep_save, is_best_save, is_best_avg_save]) == None).sum() == 3):
+                to_save = False
+            else:
+                model.to_cpu()
+                saver.save_checkpoint(save_dict   = {'model_params': [entity.state_dict() for entity in model.entities]},
+                                      episode     = ep_save,
+                                      is_best     = is_best_save,
+                                      is_best_avg = is_best_avg_save
+                                      )
+                to_save = True
+            
+            #if (np.asarray([ep_save, is_best_save, is_best_avg_save]) == None).sum() != 3:
+    
+            if (i_episode+1)%100 == 0:
+                summary = summaries[0] if train else summaries[1]
+                summary.update_log(i_episode, 
+                                episode_rewards.sum(), 
+                                list(episode_rewards.reshape(-1,)), 
+                                critic_loss        = critic_losses, 
+                                actor_loss         = actor_losses,
+                                to_save            = to_save, 
+                                comm_reward_total  = episode_comm_rewards.sum(),
+                                comm_reward_agents = list(episode_comm_rewards.reshape(-1,))
+                                )
+        
+
+        # Save gif
+        dir_monitor = config['dir_monitor_train'] if train else config['dir_monitor_test']
+        if config['render'] > 0 and i_episode % config['render'] == 0:
+            if config['env_id'] == 'waterworld':
+                imageio.mimsave('{}/{}.gif'.format(dir_monitor, i_episode), frames[0::3])
+            else:
+                imageio.mimsave('{}/{}.gif'.format(dir_monitor, i_episode), frames)
+            
+    # <-- end loop: i_episode
+    if train:
+        print('Training completed')
+    else:
+        print('Test completed')
+    
+    return (episode_rewards_all, episode_comm_rewards_all)
+
 
 if __name__ == '__main__':
 
