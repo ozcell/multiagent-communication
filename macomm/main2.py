@@ -199,7 +199,7 @@ def run(model, experiment_args, train=True):
                     if config['agent_alg'] == 'MAHCDDPG_Disc':
                         comm_actions = model.select_comm_action(observations_init, True if train else False).unsqueeze(0)
                         medium = observations_init[K.tensor(comm_actions, dtype=K.uint8)[0,0,]]
-                    if config['agent_alg'] == 'MAHDDDPG_Disc':
+                    elif config['agent_alg'] == 'MAHDDDPG_Disc':
                         comm_actions = []
                         for i in range(model.num_agents):
                             comm_action = model.select_comm_action(observations_init[[i], ], i, comm_ounoise if train else False)
@@ -232,7 +232,7 @@ def run(model, experiment_args, train=True):
             if config['aux_reward_type'] == 'intrinsic':
                 aux_rewards = intr_rewards
             elif config['aux_reward_type'] == 'cummulative':
-                aux_rewards = cumm_rewards
+                aux_rewards = rewards
 
             # for monitoring
             episode_rewards += rewards
@@ -244,9 +244,9 @@ def run(model, experiment_args, train=True):
 
             # Store the transition in memory
             if train:
-                memory[0].push(observations, actions, next_observations, rewards, medium, None, None, None, None)
+                memory[0].push(observations, actions, next_observations, aux_rewards, medium, None, None, None, None)
                 if model.communication == 'hierarchical' and (i_step+1) % config['hierarchical_time_scale'] == 0:
-                    memory[1].push(observations_init, None, next_observations, aux_rewards, medium, comm_actions, None, None, None)
+                    memory[1].push(observations_init, None, next_observations, cumm_rewards, medium, comm_actions, None, None, None)
 
             # Move to the next state
             observations = next_observations

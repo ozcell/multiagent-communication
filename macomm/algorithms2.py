@@ -688,6 +688,8 @@ class MAHDDDPG_Disc(PARENT):
         for i in range(num_agents):
             hard_update(self.comm_critics_target[i], self.comm_critics[i]) 
 
+        print("opps changed again")
+
     def select_comm_action(self, state, i_agent, exploration=False):
         self.comm_actors[i_agent].eval()
         with K.no_grad():
@@ -722,8 +724,7 @@ class MAHDDDPG_Disc(PARENT):
         Q = self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1),
                                   a[[i_agent],])
         
-        for i in range(self.num_agents):
-            a_[i,] = self.actors_target[i](K.cat([s_[[i],], m[:,mask,]], dim=-1))
+        a_[i_agent,] = self.actors_target[i_agent](K.cat([s_[[i_agent],], m[:,mask,]], dim=-1))
 
         V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m[:,mask,]], dim=-1),
                                                a_[[i_agent],]).detach()
@@ -735,8 +736,7 @@ class MAHDDDPG_Disc(PARENT):
         K.nn.utils.clip_grad_norm_(self.critics[i_agent].parameters(), 0.5)
         self.critics_optim[i_agent].step()
 
-        for i in range(self.num_agents):
-            a[i,] = self.actors[i](K.cat([s[[i],], m], dim=-1))
+        a[i_agent,] = self.actors[i_agent](K.cat([s[[i_agent],], m], dim=-1))
 
         loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1), 
                                             a[[i_agent],]).mean()
@@ -769,7 +769,7 @@ class MAHDDDPG_Disc(PARENT):
 
         Q = self.comm_critics[0](s[[i_agent],], c[[i_agent],])
 
-        c_[i_agent,] = self.comm_actors_target[i](s_[[i_agent],])
+        c_[i_agent,] = self.comm_actors_target[i_agent](s_[[i_agent],])
 
         V[mask] = self.comm_critics_target[i_agent](s_[[i_agent],], c_[[i_agent],]).detach()
 
