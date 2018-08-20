@@ -223,8 +223,6 @@ def run(model, experiment_args, train=True):
                         #medium = observations_init[(comm_actions > .5)[:,0,0]]
                         #medium = (K.mean(observations_init, dim=0) if medium.shape == K.Size([0]) else K.mean(medium, dim=0)).unsqueeze(0)
                     medium = observations_init[to_onehot(comm_actions)]
-                # constant comm actions but changing medium
-                #medium = observations[to_onehot(comm_actions)]
 
             else:
                 if config['agent_alg'] == 'MAMDDPG':
@@ -239,9 +237,6 @@ def run(model, experiment_args, train=True):
             next_observations, rewards, dones, infos = env.step(actions.squeeze(1))
             next_observations = K.tensor(next_observations, dtype=dtype).unsqueeze(1)
             rewards = K.tensor(rewards, dtype=dtype).view(-1,1,1)
-
-            # constant comm actions but changing medium
-            #next_medium = next_observations[to_onehot(comm_actions)]
             
             # different types od aux reward to train the second policy
             intr_rewards = intrinsic_reward(env, medium.numpy())
@@ -264,7 +259,6 @@ def run(model, experiment_args, train=True):
             # Store the transition in memory
             if train:
                 memory[0].push(observations, actions, next_observations, aux_rewards, medium, None, None, None, None)
-                #memory[0].push(observations, actions, next_observations, aux_rewards, medium, None, None, None, next_medium)
                 if model.communication == 'hierarchical' and (i_step+1) % config['hierarchical_time_scale'] == 0:
                     memory[1].push(observations_init, None, next_observations, cumm_rewards, medium, comm_actions, None, None, None)
 
@@ -296,7 +290,15 @@ def run(model, experiment_args, train=True):
                 if config['env_id'] == 'waterworld':
                     frames.append(sc.misc.imresize(env.render(), (300, 300)))
                 else:
-                    frames.append(env.render(mode='rgb_array')[0])  
+                    frames.append(env.render(mode='rgb_array')[0]) 
+                    if config['render_color_change']: 
+                        for i_geoms, geoms in enumerate(env.render_geoms):
+                            if i_geoms == env.world.leader:
+                                geoms.set_color(0.85,0.35,0.35,0.55)
+                            else:
+                                geoms.set_color(0.35,0.35,0.85,0.55)
+                            if i_geoms == env.n - 1:
+                                break
 
         # <-- end loop: i_step 
         

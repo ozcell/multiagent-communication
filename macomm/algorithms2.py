@@ -343,7 +343,6 @@ class MAHCDDPG(PARENT):
         a_ = K.zeros_like(a)[:,0:s_.shape[1],]
         
         m = K.cat(batch.medium, dim=1).to(self.device)
-        #m_ = K.cat(batch.prev_medium, dim=1).to(self.device)
 
         if self.normalized_rewards:
             r -= r.mean()
@@ -354,12 +353,9 @@ class MAHCDDPG(PARENT):
         
         for i in range(self.num_agents):
             a_[i,] = self.actors_target[i](K.cat([s_[[i],], m[:,mask,]], dim=-1))
-            #a_[i,] = self.actors_target[i](K.cat([s_[[i],], m_[:,mask,]], dim=-1))
 
         V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m[:,mask,]], dim=-1),
                                                a_[[i_agent],]).detach()
-        #V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_[:,mask,]], dim=-1),
-        #                                       a_[[i_agent],]).detach()
 
         loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0)) 
 

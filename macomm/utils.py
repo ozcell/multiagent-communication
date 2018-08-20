@@ -371,6 +371,9 @@ def get_params2(args=[], verbose=False):
                         help='fast exp mode is usually used to try is code run')
     parser.add_argument("--render", default=0, type=int,
                         help="epochs interval for rendering, 0: no rendering")
+    parser.add_argument("--render_color_change", default="False",
+                        choices=['True', 'False'],
+                        help="Changing the color of leader during rendering") 
     parser.add_argument("--benchmark", action="store_true",
                         help="benchmark mode")
     parser.add_argument("--regularization", default="True",
@@ -470,6 +473,12 @@ def get_params2(args=[], verbose=False):
         args['reward_normalization'] = True
     else:
         args['reward_normalization'] = False
+
+    # discrete actions
+    if args['render_color_change'] == 'True':
+        args['render_color_change'] = True
+    else:
+        args['render_color_change'] = False
 
     if verbose:
         print("\n==> Arguments:")
