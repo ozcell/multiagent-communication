@@ -175,6 +175,8 @@ def run(model, experiment_args, train=True):
     t = 0
     episode_rewards_all = []
     episode_aux_rewards_all = []
+
+    print('oops changed')
         
     for i_episode in range(start_episode, NUM_EPISODES):
         
@@ -221,6 +223,9 @@ def run(model, experiment_args, train=True):
                         #medium = observations_init[(comm_actions > .5)[:,0,0]]
                         #medium = (K.mean(observations_init, dim=0) if medium.shape == K.Size([0]) else K.mean(medium, dim=0)).unsqueeze(0)
                     medium = observations_init[to_onehot(comm_actions)]
+                # constant comm actions but changing medium
+                #medium = observations[to_onehot(comm_actions)]
+
             else:
                 if config['agent_alg'] == 'MAMDDPG':
                     medium = model.select_comm_action(observations).unsqueeze(0)
@@ -234,6 +239,9 @@ def run(model, experiment_args, train=True):
             next_observations, rewards, dones, infos = env.step(actions.squeeze(1))
             next_observations = K.tensor(next_observations, dtype=dtype).unsqueeze(1)
             rewards = K.tensor(rewards, dtype=dtype).view(-1,1,1)
+
+            # constant comm actions but changing medium
+            #next_medium = next_observations[to_onehot(comm_actions)]
             
             # different types od aux reward to train the second policy
             intr_rewards = intrinsic_reward(env, medium.numpy())
@@ -256,6 +264,7 @@ def run(model, experiment_args, train=True):
             # Store the transition in memory
             if train:
                 memory[0].push(observations, actions, next_observations, aux_rewards, medium, None, None, None, None)
+                #memory[0].push(observations, actions, next_observations, aux_rewards, medium, None, None, None, next_medium)
                 if model.communication == 'hierarchical' and (i_step+1) % config['hierarchical_time_scale'] == 0:
                     memory[1].push(observations_init, None, next_observations, cumm_rewards, medium, comm_actions, None, None, None)
 
