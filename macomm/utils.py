@@ -334,8 +334,8 @@ def get_params2(args=[], verbose=False):
     parser.add_argument("--gamma", default=0.95, type=float,
                         help="discount factor")
     parser.add_argument("--agent_alg",
-                        default="MAHCDDPG_Disc", type=str,
-                        choices=['MAMDDPG', 'MAHCDDPG', 'MAHCDDPG_Disc', 'MAHDDDPG_Disc'])
+                        default="MAHCDDPG", type=str,
+                        choices=['MAMDDPG', 'MAHCDDPG', 'MAHDDDPG'])
     parser.add_argument("--device", default='cuda',
                         choices=['cpu','cuda'], 
                         help="device type")
@@ -379,6 +379,16 @@ def get_params2(args=[], verbose=False):
     parser.add_argument("--reward_normalization", default="True",
                         choices=['True', 'False'],
                         help="Normalizing the rewards")
+    parser.add_argument("--discrete_action", default="False",
+                        choices=['True', 'False'],
+                        help="discrete actions")
+    parser.add_argument("--discrete_comm", default="False",
+                        choices=['True', 'False'],
+                        help="discrete communication actions")
+    parser.add_argument("--comm_plcy_lr", default=0.01, type=float,
+                        help="learning rate")
+    parser.add_argument("--comm_crtc_lr", default=0.01, type=float,
+                        help="learning rate")
 
 
     parser.add_argument('--verbose', default=1, type=int,\
@@ -436,6 +446,18 @@ def get_params2(args=[], verbose=False):
     # noise
     if args['n_exploration_eps'] < 0:
         args['n_exploration_eps'] = args['n_episodes']
+
+    # discrete actions
+    if args['discrete_action'] == 'True':
+        args['discrete_action'] = True
+    else:
+        args['discrete_action'] = False
+    
+    # discrete actions
+    if args['discrete_comm'] == 'True':
+        args['discrete_comm'] = True
+    else:
+        args['discrete_comm'] = False
 
     # discrete actions
     if args['regularization'] == 'True':

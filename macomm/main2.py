@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from macomm.algorithms2 import MAMDDPG, MAHCDDPG, MAHCDDPG_Disc, MAHDDDPG_Disc
+from macomm.algorithms2 import MAMDDPG, MAHCDDPG, MAHDDDPG
 from macomm.environments import communication, communication_v2, make_env_cont
 from macomm.experience import ReplayMemory, ReplayMemoryComm, Transition, Transition_Comm
 from macomm.exploration import OUNoise
@@ -41,6 +41,9 @@ def init(config):
 
     ACTOR_LR = config['plcy_lr'] # 0.01
     CRITIC_LR = config['crtc_lr'] # 0.01
+
+    COMM_ACTOR_LR = config['comm_plcy_lr'] # 0.01
+    COMM_CRITIC_LR = config['comm_crtc_lr'] # 0.01
 
     MEM_SIZE = config['buffer_length'] # 1000000 
 
@@ -79,7 +82,7 @@ def init(config):
         action_space = env.action_space[0].n
         OUT_FUNC = F.sigmoid
 
-    #if (config['agent_alg'] == 'MAMDDPG' or config['agent_alg'] == 'MAHCDDPG_Disc'):
+    #if (config['agent_alg'] == 'MAMDDPG' or config['agent_alg'] == 'MAHCDDPG'):
     medium_space = observation_space      
     #else:
     #    medium_space = observation_space + 1
@@ -94,12 +97,11 @@ def init(config):
     elif config['agent_alg'] == 'MAHCDDPG':
         MODEL = MAHCDDPG
         comm_env = 'hierarchical'
-    elif config['agent_alg'] == 'MAHCDDPG_Disc':
-        MODEL = MAHCDDPG_Disc
+    elif config['agent_alg'] == 'MAHDDDPG':
+        MODEL = MAHDDDPG
         comm_env = 'hierarchical'
-    elif config['agent_alg'] == 'MAHDDDPG_Disc':
-        MODEL = MAHDDDPG_Disc
-        comm_env = 'hierarchical'
+    
+    discrete_comm = config['discrete_comm'] 
         
     if config['agent_type'] == 'basic':
         from macomm.agents.basic import Actor, Critic
@@ -130,12 +132,12 @@ def init(config):
     comm_ounoise = OUNoise(1)
 
     #model initialization
-    optimizer = (optim.Adam, (ACTOR_LR, CRITIC_LR)) # optimiser func, (actor_lr, critic_lr)
+    optimizer = (optim.Adam, (ACTOR_LR, CRITIC_LR, COMM_ACTOR_LR, COMM_CRITIC_LR)) # optimiser func, (actor_lr, critic_lr)
     loss_func = F.mse_loss
     model = MODEL(num_agents, observation_space, action_space, medium_space, optimizer, 
                   Actor, Critic, loss_func, GAMMA, TAU, out_func=OUT_FUNC,
                   discrete=False, regularization=REGULARIZATION, normalized_rewards=NORMALIZED_REWARDS, 
-                  communication=comm_env, Comm_Actor=Comm_Actor, Comm_Critic=Comm_Critic
+                  communication=comm_env, discrete_comm=discrete_comm, Comm_Actor=Comm_Actor, Comm_Critic=Comm_Critic
                   )
     
     if config['resume'] != '':
@@ -154,6 +156,11 @@ def init(config):
           
     return model, experiment_args
 
+def to_onehot(actions):
+    actions = actions.view(-1)
+    onehot = K.zeros_like(actions, dtype=K.uint8)
+    onehot[actions.argmax()] = 1
+    return onehot
 
 def run(model, experiment_args, train=True):
 
@@ -196,20 +203,24 @@ def run(model, experiment_args, train=True):
                 if i_step % config['hierarchical_time_scale']  == 0:
                     observations_init = observations.clone()
                     cumm_rewards = K.zeros((model.num_agents,1,1), dtype=dtype)
-                    if config['agent_alg'] == 'MAHCDDPG_Disc':
-                        comm_actions = model.select_comm_action(observations_init, True if train else False).unsqueeze(0)
-                        medium = observations_init[K.tensor(comm_actions, dtype=K.uint8)[0,0,]]
-                    elif config['agent_alg'] == 'MAHDDDPG_Disc':
+                    if config['agent_alg'] == 'MAHCDDPG':
+                        if model.discrete_comm:
+                            comm_actions = model.select_comm_action(observations_init, True if train else False).unsqueeze(0)
+                            #medium = observations_init[K.tensor(comm_actions, dtype=K.uint8)[0,0,]]
+                        else:
+                            comm_actions = model.select_comm_action(observations_init, comm_ounoise if train else False).unsqueeze(0)
+                            #medium = observations_init[(comm_actions > .5)[0,0,:]]
+                            #medium = (K.mean(observations_init, dim=0) if medium.shape == K.Size([0]) else K.mean(medium, dim=0)).unsqueeze(0)
+                            #medium = (K.mean(observations_init, dim=0) if medium.shape == K.Size([0]) else K.zeros_like(observations_init[0])).unsqueeze(0)
+                    elif config['agent_alg'] == 'MAHDDDPG':
                         comm_actions = []
                         for i in range(model.num_agents):
                             comm_action = model.select_comm_action(observations_init[[i], ], i, comm_ounoise if train else False)
                             comm_actions.append(comm_action)
                         comm_actions = K.stack(comm_actions)
-                        medium = observations_init[(comm_actions > .5)[:,0,0]]
-                        medium = (K.mean(observations_init, dim=0) if medium.shape == K.Size([0]) else K.mean(medium, dim=0)).unsqueeze(0)
-                    else:
-                        medium = model.select_comm_action(observations_init, comm_ounoise if train else False).unsqueeze(0)
-                        comm_actions = None
+                        #medium = observations_init[(comm_actions > .5)[:,0,0]]
+                        #medium = (K.mean(observations_init, dim=0) if medium.shape == K.Size([0]) else K.mean(medium, dim=0)).unsqueeze(0)
+                    medium = observations_init[to_onehot(comm_actions)]
             else:
                 if config['agent_alg'] == 'MAMDDPG':
                     medium = model.select_comm_action(observations).unsqueeze(0)
