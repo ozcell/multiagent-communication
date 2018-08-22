@@ -126,7 +126,10 @@ class MADDPG(object):
         Q = self.critics[i_agent](s, a)
 
         for i in range(self.num_agents):
-            a_[i,] = gumbel_softmax(self.actors_target[i](s_[[i],]), exploration=False)
+            if self.discrete:
+                a_[i,] = gumbel_softmax(self.actors_target[i](s_[[i],]), exploration=False)
+            else:
+                a_[i,] = self.actors_target[i](s_[[i],])
 
         V[mask] = self.critics_target[i_agent](s_, a_).detach()
 
@@ -138,7 +141,10 @@ class MADDPG(object):
         self.critics_optim[i_agent].step()
 
         for i in range(self.num_agents):
-            a[i,] = gumbel_softmax(self.actors[i](s[[i],]), exploration=False)
+            if self.discrete:
+                a[i,] = gumbel_softmax(self.actors[i](s[[i],]), exploration=False)
+            else:
+                a[i,] = self.actors[i](s[[i],])
 
         loss_actor = -self.critics[i_agent](s, a).mean()
         if self.regularization:
@@ -209,7 +215,10 @@ class ORACLE(MADDPG):
         Q = self.critics[i_agent](s, a)
 
         for i in range(self.num_agents):
-            a_[i,] = gumbel_softmax(self.actors_target[i](s_), exploration=False)
+            if self.discrete:
+                a_[i,] = gumbel_softmax(self.actors_target[i](s_), exploration=False)
+            else:
+                a_[i,] = self.actors_target[i](s_)
 
         V[mask] = self.critics_target[i_agent](s_, a_).detach()
 
@@ -221,7 +230,10 @@ class ORACLE(MADDPG):
         self.critics_optim[i_agent].step()
 
         for i in range(self.num_agents):
-            a[i,] = gumbel_softmax(self.actors[i](s), exploration=False)
+            if self.discrete:
+                a[i,] = gumbel_softmax(self.actors[i](s), exploration=False)
+            else:
+                a[i,] = self.actors[i](s)
 
         loss_actor = -self.critics[i_agent](s, a).mean()
         if self.regularization:
@@ -294,8 +306,10 @@ class DDPG(MADDPG):
 
         Q = self.critics[i_agent](s[[i_agent],], a[[i_agent],])
 
-        for i in range(self.num_agents):
-            a_[i,] = gumbel_softmax(self.actors_target[i](s_[[i],]), exploration=False)
+        if self.discrete:
+            a_[i_agent,] = gumbel_softmax(self.actors_target[i_agent](s_[[i_agent],]), exploration=False)
+        else:
+            a_[i_agent,] = self.actors_target[i_agent](s_[[i_agent],])
 
         V[mask] = self.critics_target[i_agent](s_[[i_agent],], a_[[i_agent],]).detach()
 
@@ -306,8 +320,10 @@ class DDPG(MADDPG):
         K.nn.utils.clip_grad_norm_(self.critics[i_agent].parameters(), 0.5)
         self.critics_optim[i_agent].step()
 
-        for i in range(self.num_agents):
-            a[i,] = gumbel_softmax(self.actors[i](s[[i],]), exploration=False)
+        if self.discrete:
+            a[i_agent,] = gumbel_softmax(self.actors[i_agent](s[[i_agent],]), exploration=False)
+        else:
+            a[i_agent,] = self.actors[i_agent](s[[i_agent],])
 
         loss_actor = -self.critics[i_agent](s[[i_agent],], a[[i_agent],]).mean()
         if self.regularization:
@@ -1334,17 +1350,6 @@ class MSDDPG(MADCDDPG):
         optimizer, lr = optimizer
         actor_lr, critic_lr = lr
 
-        #self.num_agents = num_agents
-        #self.loss_func = loss_func
-        #self.gamma = gamma
-        #self.tau = tau
-        #self.discrete = discrete
-        #self.regularization = regularization
-        #self.normalized_rewards = normalized_rewards
-        #self.dtype = dtype
-        #self.device = device
-        #self.communication = communication
-
         # model initialization
         self.entities = []
 
@@ -1394,8 +1399,8 @@ class MSDDPG(MADCDDPG):
         s_ = K.cat([i.to(self.device) for i in batch.next_state if i is not None], dim=1)
         a_ = K.zeros_like(a)[:,0:s_.shape[1],]
 
-        m = s[[0],]
-        m_ = s_[[0],]
+        m = K.cat(batch.medium, dim=1).to(self.device)
+        m_ = K.cat(batch.prev_medium, dim=1).to(self.device)
         
         if self.normalized_rewards:
             r -= r.mean()
@@ -1404,10 +1409,12 @@ class MSDDPG(MADCDDPG):
         Q = self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1),
                                   a[[i_agent],])
         
-        for i in range(self.num_agents):
-            a_[i,] = gumbel_softmax(self.actors_target[i](K.cat([s_[[i],], m_], dim=-1)), exploration=False)
+        if self.discrete:
+            a_[i_agent,] = gumbel_softmax(self.actors_target[i_agent](K.cat([s_[[i_agent],], m_], dim=-1)), exploration=False)
+        else:
+            a_[i_agent,] = self.actors_target[i_agent](K.cat([s_[[i_agent],], m_[:,mask,:]], dim=-1))
 
-        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_], dim=-1),
+        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_[:,mask,:]], dim=-1),
                                                a_[[i_agent],]).detach()
 
         loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0)) 
@@ -1417,8 +1424,10 @@ class MSDDPG(MADCDDPG):
         K.nn.utils.clip_grad_norm_(self.critics[i_agent].parameters(), 0.5)
         self.critics_optim[i_agent].step()
 
-        for i in range(self.num_agents):
-            a[i,] = gumbel_softmax(self.actors[i](K.cat([s[[i],], m], dim=-1)), exploration=False)
+        if self.discrete:
+            a[i_agent,] = gumbel_softmax(self.actors[i_agent](K.cat([s[[i_agent],], m], dim=-1)), exploration=False)
+        else:
+            a[i_agent,] = self.actors[i_agent](K.cat([s[[i_agent],], m], dim=-1))
 
         loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1), 
                                             a[[i_agent],]).mean()

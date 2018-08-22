@@ -9,7 +9,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 from macomm.algorithms import MADDPG, MACDDPG, DDPG, ORACLE, MACCDDPG, MADCDDPG, MSDDPG
-from macomm.algorithms import MS3DDPG, MADCDDPG_WS, MADCDDPG_WSC, MADCDDPG_v2, MADCDDPG_MS, MADCDDPG_Trained, MAMDDPG, MAHCDDPG, MAHCDDPG_Disc
+from macomm.algorithms import MS3DDPG, MADCDDPG_WS, MADCDDPG_WSC, MADCDDPG_v2, MADCDDPG_MS, MADCDDPG_Trained
 from macomm.environments import communication, communication_v2, make_env_cont
 from macomm.experience import ReplayMemory, ReplayMemoryComm, Transition, Transition_Comm, ReplayMemoryCommLstm, Transition_Comm_Lstm
 from macomm.exploration import OUNoise
@@ -239,6 +239,8 @@ def init(config):
             memory = ReplayMemoryComm(MEM_SIZE)
     elif config['agent_alg'] == 'MAHCDDPG' or config['agent_alg'] == 'MAHCDDPG_Disc':
         memory = [ReplayMemoryComm(MEM_SIZE), ReplayMemoryComm(MEM_SIZE)]
+    elif config['agent_alg'] == 'MSDDPG':
+        memory = ReplayMemoryComm(MEM_SIZE)
     else:
         memory = ReplayMemory(MEM_SIZE)
         
@@ -273,8 +275,8 @@ def run(model, experiment_args, train=True):
         observations = np.stack(env.reset())
         observations = K.tensor(observations, dtype=K.float32).unsqueeze(1)
         #comm_env.reset()
-        prev_medium = K.zeros((1, observations.shape[1], observations.shape[2]+1), dtype=observations.dtype, device=observations.device)
-        prev_actions = K.zeros((model.num_agents, 1, model.action_space))
+        #prev_medium = K.zeros((1, observations.shape[1], observations.shape[2]+1), dtype=observations.dtype, device=observations.device)
+        #prev_actions = K.zeros((model.num_agents, 1, model.action_space))
 
         episode_rewards = np.zeros((model.num_agents,1,1))
         episode_comm_rewards = np.zeros((model.num_agents,1,1))
@@ -303,10 +305,10 @@ def run(model, experiment_args, train=True):
                         #comm_context = model.comm_actors[i].get_h()
                         comm_contexts.append(comm_context)
 
-                    if config['agent_alg'] == 'MADCDDPG_v2': 
-                        comm_action = model.select_comm_action(K.cat([observations[[i], ], prev_medium], dim=-1), i, comm_ounoise if train else False)
-                    else:    
-                        comm_action = model.select_comm_action(observations[[i], ], i, comm_ounoise if train else False)
+                    #if config['agent_alg'] == 'MADCDDPG_v2': 
+                    #    comm_action = model.select_comm_action(K.cat([observations[[i], ], prev_medium], dim=-1), i, comm_ounoise if train else False)
+                    #else:    
+                    comm_action = model.select_comm_action(observations[[i], ], i, comm_ounoise if train else False)
                     comm_actions.append(comm_action)
 
                     if config['comm_agent_type'] == 'lstm':
@@ -344,7 +346,8 @@ def run(model, experiment_args, train=True):
                         if config['agent_alg'] == 'ORACLE':
                             action = model.select_action(observations, i, ounoise if train else False)
                         elif config['agent_alg'] == 'MSDDPG':
-                            action = model.select_action(K.cat([observations[[i], ], observations[[0], ]], dim=-1), i, ounoise if train else False)
+                            medium = observations[[env.world.leader], ]
+                            action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, ounoise if train else False)
                         elif config['agent_alg'] == 'MS3DDPG':
                             action = model.select_action(K.cat([observations[[i], ], observations[[(i-1)%model.num_agents], ]], dim=-1), i, ounoise if train else False)
                         else:
@@ -359,15 +362,17 @@ def run(model, experiment_args, train=True):
             next_observations = K.tensor(next_observations, dtype=K.float32).unsqueeze(1)
             rewards = K.tensor(rewards, dtype=dtype).view(-1,1,1)
             episode_rewards += rewards
-            prev_medium = medium
+            #prev_medium = medium
+            if config['agent_alg'] == 'MSDDPG':
+                next_medium = next_observations[[env.world.leader], ]
             ## do not forget to delete these two lines
             #prev_medium = K.cat([next_observations[[env.world.leader], ], (env.world.leader+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
             #prev_medium = K.tensor(prev_medium, dtype=K.float32)     
 
             # if it is the last step we don't need next obs
-            #if i_step == EPISODE_LENGTH-1:
-            #    next_observations = None
-            #    next_comm_contexts = None
+            if i_step == EPISODE_LENGTH-1:
+                next_observations = None
+                next_comm_contexts = None
 
             # Store the transition in memory
             if train:
@@ -375,7 +380,9 @@ def run(model, experiment_args, train=True):
                     if config['comm_agent_type'] == 'lstm':
                         memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, comm_contexts, next_comm_contexts, prev_actions)
                     else:
-                        memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, prev_actions, prev_medium)
+                        memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, prev_actions, None)
+                elif config['agent_alg'] == 'MSDDPG':
+                        memory.push(observations, actions, next_observations, rewards, medium, None, None, None, next_medium)
                 else:
                     memory.push(observations, actions, next_observations, rewards)
 
@@ -398,7 +405,10 @@ def run(model, experiment_args, train=True):
                             else:
                                 batch = Transition_Comm(*zip(*memory.sample(config['batch_size'])))
                         else:
-                            batch = Transition(*zip(*memory.sample(config['batch_size'])))
+                            if config['agent_alg'] == 'MSDDPG':
+                                batch = Transition_Comm(*zip(*memory.sample(config['batch_size'])))
+                            else:
+                                batch = Transition(*zip(*memory.sample(config['batch_size'])))
                         model.to_cuda()
                         critic_loss, actor_loss = model.update_parameters(batch, i)
                         critic_losses.append(critic_loss)
