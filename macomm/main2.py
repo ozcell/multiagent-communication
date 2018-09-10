@@ -205,23 +205,16 @@ def run(model, experiment_args, train=True):
                 if i_step % config['hierarchical_time_scale']  == 0:
                     observations_init = observations.clone()
                     cumm_rewards = K.zeros((model.num_agents,1,1), dtype=dtype)
-                    if config['agent_alg'] == 'MAHCDDPG':
+                    comm_actions = []
+                    for i in range(model.num_agents):
                         if model.discrete_comm:
-                            comm_actions = model.select_comm_action(observations_init, True if train else False).unsqueeze(0)
-                            #medium = observations_init[K.tensor(comm_actions, dtype=K.uint8)[0,0,]]
+                            comm_action = model.select_comm_action(observations_init[[i], ], i, True if train else False)
                         else:
-                            comm_actions = model.select_comm_action(observations_init, comm_ounoise if train else False).unsqueeze(0)
-                            #medium = observations_init[(comm_actions > .5)[0,0,:]]
-                            #medium = (K.mean(observations_init, dim=0) if medium.shape == K.Size([0]) else K.mean(medium, dim=0)).unsqueeze(0)
-                            #medium = (K.mean(observations_init, dim=0) if medium.shape == K.Size([0]) else K.zeros_like(observations_init[0])).unsqueeze(0)
-                    elif config['agent_alg'] == 'MAHDDDPG':
-                        comm_actions = []
-                        for i in range(model.num_agents):
                             comm_action = model.select_comm_action(observations_init[[i], ], i, comm_ounoise if train else False)
-                            comm_actions.append(comm_action)
-                        comm_actions = K.stack(comm_actions)
-                        #medium = observations_init[(comm_actions > .5)[:,0,0]]
-                        #medium = (K.mean(observations_init, dim=0) if medium.shape == K.Size([0]) else K.mean(medium, dim=0)).unsqueeze(0)
+                        comm_actions.append(comm_action)
+                    comm_actions = K.stack(comm_actions)
+                    #medium = observations_init[(comm_actions > .5)[:,0,0]]
+                    #medium = (K.mean(observations_init, dim=0) if medium.shape == K.Size([0]) else K.mean(medium, dim=0)).unsqueeze(0)
                     medium = observations_init[to_onehot(comm_actions)]
 
             else:

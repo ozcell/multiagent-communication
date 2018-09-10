@@ -292,12 +292,12 @@ class MAHCDDPG(PARENT):
         self.comm_actors_target = []
         self.comm_actors_optim = []
         
-        for i in range(1):
-            self.comm_actors.append(Comm_Actor(observation_space*num_agents, num_agents, discrete_comm, F.sigmoid).to(device))
-            self.comm_actors_target.append(Comm_Actor(observation_space*num_agents, num_agents, discrete_comm, F.sigmoid).to(device))
+        for i in range(num_agents):
+            self.comm_actors.append(Comm_Actor(observation_space, 1, discrete_comm, F.sigmoid).to(device))
+            self.comm_actors_target.append(Comm_Actor(observation_space, 1, discrete_comm, F.sigmoid).to(device))
             self.comm_actors_optim.append(optimizer(self.comm_actors[i].parameters(), lr = comm_actor_lr))
             
-        for i in range(1):
+        for i in range(num_agents):
             hard_update(self.comm_actors_target[i], self.comm_actors[i])
 
         self.entities.extend(self.comm_actors)
@@ -309,19 +309,21 @@ class MAHCDDPG(PARENT):
         self.comm_critics_target = []
         self.comm_critics_optim = []
         
-        for i in range(1):
+        for i in range(num_agents):
             self.comm_critics.append(Comm_Critic(observation_space*num_agents, num_agents).to(device))
             self.comm_critics_target.append(Comm_Critic(observation_space*num_agents, num_agents).to(device))
             self.comm_critics_optim.append(optimizer(self.comm_critics[i].parameters(), lr = comm_critic_lr))
 
-        for i in range(1):
+        for i in range(num_agents):
             hard_update(self.comm_critics_target[i], self.comm_critics[i]) 
 
-    def select_comm_action(self, state, exploration=False):
-        self.comm_actors[0].eval()
+        print('ahanda')
+
+    def select_comm_action(self, state, i_agent, exploration=False):
+        self.comm_actors[i_agent].eval()
         with K.no_grad():
-            mu = self.comm_actors[0](state.to(self.device))
-        self.actors[0].train()
+            mu = self.comm_actors[i_agent](state.to(self.device))
+        self.actors[i_agent].train()
         if self.discrete_comm:
             mu = gumbel_softmax(mu, exploration=exploration)
         else:
@@ -382,55 +384,56 @@ class MAHCDDPG(PARENT):
         soft_update(self.critics_target[i_agent], self.critics[i_agent], self.tau)
 
         ## update of the communication part
-        if i_agent == self.num_agents-1:
 
-            mask = K.tensor(tuple(map(lambda s: s is not None, batch2.next_state)), dtype=K.uint8, device=self.device)
-            V = K.zeros((len(batch2.state), 1), device=self.device)
+        mask = K.tensor(tuple(map(lambda s: s is not None, batch2.next_state)), dtype=K.uint8, device=self.device)
+        V = K.zeros((len(batch2.state), 1), device=self.device)
 
-            s = K.cat(batch2.state, dim=1).to(self.device)
-            r = K.cat(batch2.reward, dim=1).to(self.device)
-            s_ = K.cat([i.to(self.device) for i in batch2.next_state if i is not None], dim=1)
-            
-            c = K.cat(batch2.comm_action, dim=1).to(self.device)
-            c_ = K.zeros_like(c)[:,0:s_.shape[1],]
-            
-            if self.normalized_rewards:
-                r -= r.mean()
-                r /= r.std()
+        s = K.cat(batch2.state, dim=1).to(self.device)
+        r = K.cat(batch2.reward, dim=1).to(self.device)
+        s_ = K.cat([i.to(self.device) for i in batch2.next_state if i is not None], dim=1)
+        
+        c = K.cat(batch2.comm_action, dim=1).to(self.device)
+        c_ = K.zeros_like(c)[:,0:s_.shape[1],]
+        
+        if self.normalized_rewards:
+            r -= r.mean()
+            r /= r.std()
 
-            Q = self.comm_critics[0](s, c)
+        Q = self.comm_critics[i_agent](s, c)
 
+        for i in range(self.num_agents):
             if self.discrete_comm:
-                c_ = gumbel_softmax(self.comm_actors_target[0](s_), exploration=False).unsqueeze(0)
+                c_[i,] = gumbel_softmax(self.comm_actors_target[i](s_[[i],]), exploration=False)
             else:
-                c_ = self.comm_actors_target[0](s_).unsqueeze(0)
+                c_[i,] = self.comm_actors_target[i](s_[[i],])
 
-            V[mask] = self.comm_critics_target[0](s_, c_).detach()
+        V[mask] = self.comm_critics_target[i_agent](s_, c_).detach()
 
-            loss_critic = self.loss_func(Q, (V * self.gamma) + r[[0],].squeeze(0)) 
+        loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0)) 
 
-            self.comm_critics_optim[0].zero_grad()
-            loss_critic.backward()
-            K.nn.utils.clip_grad_norm_(self.comm_critics[0].parameters(), 0.5)
-            self.comm_critics_optim[0].step()
+        self.comm_critics_optim[i_agent].zero_grad()
+        loss_critic.backward()
+        K.nn.utils.clip_grad_norm_(self.comm_critics[i_agent].parameters(), 0.5)
+        self.comm_critics_optim[i_agent].step()
 
+        for i in range(self.num_agents):
             if self.discrete_comm:
-                c = gumbel_softmax(self.comm_actors[0](s), exploration=False).unsqueeze(0)
+                c[i,] = gumbel_softmax(self.comm_actors[i](s[[i],]), exploration=False)
             else:
-                c = self.comm_actors[0](s).unsqueeze(0)
+                c[i,] = self.comm_actors[i](s[[i],])
 
-            loss_actor = -self.comm_critics[0](s, c).mean()
-            
-            if self.regularization:
-                loss_actor += (self.comm_actors[0].get_preactivations(s)**2).mean()*1e-3
+        loss_actor = -self.comm_critics[i_agent](s, c).mean()
+        
+        if self.regularization:
+            loss_actor += (self.comm_actors[i_agent].get_preactivations(s[[i_agent],])**2).mean()*1e-3
 
-            self.comm_actors_optim[0].zero_grad()        
-            loss_actor.backward()
-            K.nn.utils.clip_grad_norm_(self.comm_actors[0].parameters(), 0.5)
-            self.comm_actors_optim[0].step()
+        self.comm_actors_optim[i_agent].zero_grad()        
+        loss_actor.backward()
+        K.nn.utils.clip_grad_norm_(self.comm_actors[i_agent].parameters(), 0.5)
+        self.comm_actors_optim[i_agent].step()
 
-            soft_update(self.comm_actors_target[0], self.comm_actors[0], self.tau)
-            soft_update(self.comm_critics_target[0], self.comm_critics[0], self.tau)
+        soft_update(self.comm_actors_target[i_agent], self.comm_actors[i_agent], self.tau)
+        soft_update(self.comm_critics_target[i_agent], self.comm_critics[i_agent], self.tau)
 
         
         return loss_critic.item(), loss_actor.item()
