@@ -8,11 +8,11 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from macomm.algorithms2 import MAMDDPG, MAHCDDPG, MAHDDDPG
+from macomm.algorithms2 import MAMDDPG, MAHCDDPG, MAHDDDPG, MAHCDDPG_Multi
 from macomm.environments import communication, communication_v2, make_env_cont
 from macomm.experience import ReplayMemory, ReplayMemoryComm, Transition, Transition_Comm
 from macomm.exploration import OUNoise
-from macomm.utils import Saver, Summarizer, get_noise_scale, get_params2, running_mean, intrinsic_reward
+from macomm.utils import Saver, Summarizer, get_noise_scale, get_params2, running_mean, intrinsic_reward, intrinsic_reward_multi
 
 import pdb
 
@@ -99,6 +99,9 @@ def init(config):
         comm_env = 'hierarchical'
     elif config['agent_alg'] == 'MAHDDDPG':
         MODEL = MAHDDDPG
+        comm_env = 'hierarchical'    
+    elif config['agent_alg'] == 'MAHCDDPG_Multi':
+        MODEL = MAHCDDPG_Multi
         comm_env = 'hierarchical'
     
     discrete_comm = config['discrete_comm'] 
@@ -129,7 +132,10 @@ def init(config):
 
     #exploration initialization
     ounoise = OUNoise(action_space)
-    comm_ounoise = OUNoise(1)
+    if config['agent_alg'] == 'MAHCDDPG_Multi':
+        comm_ounoise = OUNoise(num_agents)
+    else:
+        comm_ounoise = OUNoise(1)
 
     #model initialization
     optimizer = (optim.Adam, (ACTOR_LR, CRITIC_LR, COMM_ACTOR_LR, COMM_CRITIC_LR)) # optimiser func, (actor_lr, critic_lr)
@@ -215,15 +221,24 @@ def run(model, experiment_args, train=True):
                     comm_actions = K.stack(comm_actions)
                     #medium = observations_init[(comm_actions > .5)[:,0,0]]
                     #medium = (K.mean(observations_init, dim=0) if medium.shape == K.Size([0]) else K.mean(medium, dim=0)).unsqueeze(0)
-                    medium = observations_init[to_onehot(comm_actions)]
-
+                    if config['agent_alg'] == 'MAHCDDPG_Multi':
+                        medium = []
+                        for i in range(model.num_agents):
+                            medium.append(observations_init[to_onehot(comm_actions[:,:,i])].squeeze(0))
+                        medium = K.stack(medium)
+                    else:
+                        medium = observations_init[to_onehot(comm_actions)]
             else:
                 if config['agent_alg'] == 'MAMDDPG':
                     medium = model.select_comm_action(observations).unsqueeze(0)
-
+            #if i_episode > 1000:
+                #pdb.set_trace()
             actions = []
             for i in range(model.num_agents):
-                action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, ounoise if train else False)
+                if config['agent_alg'] == 'MAHCDDPG_Multi':
+                    action = model.select_action(K.cat([observations[[i], ], medium[[i], ]], dim=-1), i, ounoise if train else False)
+                else:
+                    action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, ounoise if train else False)
                 actions.append(action)
             actions = K.stack(actions)
 
@@ -232,7 +247,10 @@ def run(model, experiment_args, train=True):
             rewards = K.tensor(rewards, dtype=dtype).view(-1,1,1)
             
             # different types od aux reward to train the second policy
-            intr_rewards = intrinsic_reward(env, medium.numpy())
+            if config['agent_alg'] == 'MAHCDDPG_Multi':
+                intr_rewards = intrinsic_reward_multi(env, medium.numpy())
+            else:
+                intr_rewards = intrinsic_reward(env, medium.numpy())
             intr_rewards = K.tensor(intr_rewards, dtype=dtype).view(-1,1,1)
             cumm_rewards += rewards
 

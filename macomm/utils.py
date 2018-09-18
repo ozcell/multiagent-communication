@@ -92,6 +92,30 @@ def intrinsic_reward(env, medium):
         rew_all.append(rew)
     return rew_all
 
+def intrinsic_reward_multi(env, medium):
+    # Agents are rewarded based on minimum agent distance to each landmark, penalized for collisions
+    rew_all = []
+    landmarks = []
+    landmarks.append(medium[0].reshape(-1,)[8:10].reshape(-1,2))
+    landmarks.append(medium[1].reshape(-1,)[4:6].reshape(-1,2))
+    landmarks.append(medium[2].reshape(-1,)[6:8].reshape(-1,2))
+    medium_p_state = []
+    medium_p_state.append(medium[0].reshape(-1,)[2:4].reshape(-1,2))
+    medium_p_state.append(medium[1].reshape(-1,)[2:4].reshape(-1,2))
+    medium_p_state.append(medium[2].reshape(-1,)[2:4].reshape(-1,2))
+    for agent in env.agents:
+        rew = 0
+        for i in range(env.n):
+            dist = np.sqrt(np.sum(np.square(env.agents[i].state.p_pos - (landmarks[i] + medium_p_state[i]))))
+            rew -= dist
+        if agent.collide:
+            for a in env.agents:
+                if is_collision(a, agent):
+                    rew -= 1
+        rew_all.append(rew)
+    return rew_all
+
+
 def is_collision(agent1, agent2):
         delta_pos = agent1.state.p_pos - agent2.state.p_pos
         dist = np.sqrt(np.sum(np.square(delta_pos)))
@@ -335,7 +359,7 @@ def get_params2(args=[], verbose=False):
                         help="discount factor")
     parser.add_argument("--agent_alg",
                         default="MAHCDDPG", type=str,
-                        choices=['MAMDDPG', 'MAHCDDPG', 'MAHDDDPG'])
+                        choices=['MAMDDPG', 'MAHCDDPG', 'MAHDDDPG', 'MAHCDDPG_Multi'])
     parser.add_argument("--device", default='cuda',
                         choices=['cpu','cuda'], 
                         help="device type")

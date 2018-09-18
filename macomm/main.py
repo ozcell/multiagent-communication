@@ -349,7 +349,9 @@ def run(model, experiment_args, train=True):
                             medium = observations[[env.world.leader], ]
                             action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, ounoise if train else False)
                         elif config['agent_alg'] == 'MS3DDPG':
-                            action = model.select_action(K.cat([observations[[i], ], observations[[(i-1)%model.num_agents], ]], dim=-1), i, ounoise if train else False)
+                            medium = observations[[env.world.leader[i]], ]
+                            action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, ounoise if train else False)
+                            #action = model.select_action(K.cat([observations[[i], ], observations[[(i-1)%model.num_agents], ]], dim=-1), i, ounoise if train else False)
                         else:
                             if config['exploration'] == 'EOBO':
                                 action = model.select_action(observations[[i], ], i, ounoise if (train and i == explorer)  else False)
