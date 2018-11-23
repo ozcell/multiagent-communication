@@ -78,7 +78,7 @@ def plot_durations(durations):
 def intrinsic_reward(env, medium):
     # Agents are rewarded based on minimum agent distance to each landmark, penalized for collisions
     rew_all = []
-    landmarks = medium.reshape(-1,)[4:10].reshape(-1,2)
+    landmarks = medium.reshape(-1,)[4:(4+env.n*2)].reshape(-1,2)
     medium_p_state = medium.reshape(-1,)[2:4].reshape(-1,2)
     for agent in env.agents:
         rew = 0

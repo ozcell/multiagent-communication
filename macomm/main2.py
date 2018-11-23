@@ -181,6 +181,8 @@ def run(model, experiment_args, train=True):
     t = 0
     episode_rewards_all = []
     episode_aux_rewards_all = []
+    episode_comm_all = []
+    episode_comm_any_all = []
 
     print('oops changed')
         
@@ -189,6 +191,10 @@ def run(model, experiment_args, train=True):
         episode_time_start = time.time()
         
         frames = []
+        episode_comm = 0
+        episode_comm_any = 0
+
+        hier_C = config['hierarchical_time_scale'] if train else 1
         
         # Initialize the environment and state
         observations = np.stack(env.reset())
@@ -208,7 +214,7 @@ def run(model, experiment_args, train=True):
             model.to_cpu()
 
             if model.communication == 'hierarchical':
-                if i_step % config['hierarchical_time_scale']  == 0:
+                if i_step % hier_C  == 0:
                     observations_init = observations.clone()
                     cumm_rewards = K.zeros((model.num_agents,1,1), dtype=dtype)
                     comm_actions = []
@@ -223,11 +229,19 @@ def run(model, experiment_args, train=True):
                     #medium = (K.mean(observations_init, dim=0) if medium.shape == K.Size([0]) else K.mean(medium, dim=0)).unsqueeze(0)
                     if config['agent_alg'] == 'MAHCDDPG_Multi':
                         medium = []
+                        allocaters = []
                         for i in range(model.num_agents):
                             medium.append(observations_init[to_onehot(comm_actions[:,:,i])].squeeze(0))
+                            allocaters.append(np.asarray(comm_actions[:,:,i].view(-1).argmax()))
+                        allocaters = np.asarray(allocaters)
                         medium = K.stack(medium)
                     else:
-                        medium = observations_init[to_onehot(comm_actions)]
+                        if model.discrete_comm:
+                            medium = observations_init[to_onehot(comm_actions[:,:,1].unsqueeze(2))]
+                        else:
+                            medium = observations_init[to_onehot(comm_actions)]
+                        allocaters = comm_actions.view(-1).argmax()
+                        allocaters = np.asarray(allocaters)
             else:
                 if config['agent_alg'] == 'MAMDDPG':
                     medium = model.select_comm_action(observations).unsqueeze(0)
@@ -270,7 +284,7 @@ def run(model, experiment_args, train=True):
             # Store the transition in memory
             if train:
                 memory[0].push(observations, actions, next_observations, aux_rewards, medium, None, None, None, None)
-                if model.communication == 'hierarchical' and (i_step+1) % config['hierarchical_time_scale'] == 0:
+                if model.communication == 'hierarchical' and (i_step+1) % hier_C == 0:
                     memory[1].push(observations_init, None, next_observations, cumm_rewards, medium, comm_actions, None, None, None)
 
             # Move to the next state
@@ -311,12 +325,21 @@ def run(model, experiment_args, train=True):
                             if i_geoms == env.n - 1:
                                 break
 
+            if config['agent_alg'] == 'MAHCDDPG_Multi':
+                episode_comm += np.all((env.world.leader-1)%model.num_agents==allocaters)
+                episode_comm_any += np.any((env.world.leader-1)%model.num_agents==allocaters)
+            elif config['agent_alg'] == 'MAHCDDPG':
+                episode_comm += np.all(env.world.leader==allocaters)
+                episode_comm_any += np.any(env.world.leader==allocaters)
         # <-- end loop: i_step 
-        
+
         ### MONITORIRNG ###
 
         episode_rewards_all.append(episode_rewards.sum())
         episode_aux_rewards_all.append(episode_aux_rewards.sum())
+        episode_comm_all.append(episode_comm)
+        episode_comm_any_all.append(episode_comm_any)
+        
         if config['verbose'] > 0:
         # Printing out
             if (i_episode+1)%100 == 0:
@@ -376,7 +399,7 @@ def run(model, experiment_args, train=True):
     else:
         print('Test completed')
     
-    return (episode_rewards_all, episode_aux_rewards_all)
+    return (episode_rewards_all, episode_aux_rewards_all, episode_comm_all, episode_comm_any_all)
 
 
 if __name__ == '__main__':

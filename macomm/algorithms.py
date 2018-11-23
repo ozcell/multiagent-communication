@@ -1458,17 +1458,6 @@ class MS3DDPG(MADCDDPG):
         optimizer, lr = optimizer
         actor_lr, critic_lr = lr
 
-        #self.num_agents = num_agents
-        #self.loss_func = loss_func
-        #self.gamma = gamma
-        #self.tau = tau
-        #self.discrete = discrete
-        #self.regularization = regularization
-        #self.normalized_rewards = normalized_rewards
-        #self.dtype = dtype
-        #self.device = device
-        #self.communication = communication
-
         # model initialization
         self.entities = []
 
@@ -1504,7 +1493,8 @@ class MS3DDPG(MADCDDPG):
             
         self.entities.extend(self.critics)
         self.entities.extend(self.critics_target)
-        self.entities.extend(self.critics_optim)    
+        self.entities.extend(self.critics_optim)  
+        print('dinidin dinidin')  
 
     def update_parameters(self, batch, i_agent):
         
@@ -1518,20 +1508,20 @@ class MS3DDPG(MADCDDPG):
         s_ = K.cat([i.to(self.device) for i in batch.next_state if i is not None], dim=1)
         a_ = K.zeros_like(a)[:,0:s_.shape[1],]
 
-        m = s[[(i_agent-1)%self.num_agents],]
-        m_ = s_[[(i_agent-1)%self.num_agents],]
+        m = K.cat(batch.medium, dim=1).to(self.device)
+        m_ = K.cat(batch.prev_medium, dim=1).to(self.device)
         
         if self.normalized_rewards:
             r -= r.mean()
             r /= r.std()
 
-        Q = self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1),
+        Q = self.critics[i_agent](K.cat([s[[i_agent],], m[[i_agent],]], dim=-1),
                                   a[[i_agent],])
         
         for i in range(self.num_agents):
-            a_[i,] = gumbel_softmax(self.actors_target[i](K.cat([s_[[i],], m_], dim=-1)), exploration=False)
+            a_[i,] = gumbel_softmax(self.actors_target[i](K.cat([s_[[i],], m_[[i],][:,mask,]], dim=-1)), exploration=False)
 
-        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_], dim=-1),
+        V[mask] = self.critics_target[i_agent](K.cat([s_[[i_agent],], m_[[i_agent],][:,mask,]], dim=-1),
                                                a_[[i_agent],]).detach()
 
         loss_critic = self.loss_func(Q, (V * self.gamma) + r[[i_agent],].squeeze(0)) 
@@ -1542,13 +1532,13 @@ class MS3DDPG(MADCDDPG):
         self.critics_optim[i_agent].step()
 
         for i in range(self.num_agents):
-            a[i,] = gumbel_softmax(self.actors[i](K.cat([s[[i],], m], dim=-1)), exploration=False)
+            a[i,] = gumbel_softmax(self.actors[i](K.cat([s[[i],], m[[i],]], dim=-1)), exploration=False)
 
-        loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m], dim=-1), 
+        loss_actor = -self.critics[i_agent](K.cat([s[[i_agent],], m[[i_agent],]], dim=-1), 
                                             a[[i_agent],]).mean()
         
         if self.regularization:
-            loss_actor += (self.actors[i_agent].get_preactivations(K.cat([s[[i_agent],], m], dim=-1))**2).mean()*1e-3
+            loss_actor += (self.actors[i_agent].get_preactivations(K.cat([s[[i_agent],], m[[i_agent],]], dim=-1))**2).mean()*1e-3
 
         self.actors_optim[i_agent].zero_grad()        
         loss_actor.backward()

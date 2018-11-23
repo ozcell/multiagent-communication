@@ -239,7 +239,7 @@ def init(config):
             memory = ReplayMemoryComm(MEM_SIZE)
     elif config['agent_alg'] == 'MAHCDDPG' or config['agent_alg'] == 'MAHCDDPG_Disc':
         memory = [ReplayMemoryComm(MEM_SIZE), ReplayMemoryComm(MEM_SIZE)]
-    elif config['agent_alg'] == 'MSDDPG':
+    elif config['agent_alg'] == 'MSDDPG' or config['agent_alg'] == 'MS3DDPG': 
         memory = ReplayMemoryComm(MEM_SIZE)
     else:
         memory = ReplayMemory(MEM_SIZE)
@@ -349,8 +349,8 @@ def run(model, experiment_args, train=True):
                             medium = observations[[env.world.leader], ]
                             action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, ounoise if train else False)
                         elif config['agent_alg'] == 'MS3DDPG':
-                            medium = observations[[env.world.leader[i]], ]
-                            action = model.select_action(K.cat([observations[[i], ], medium], dim=-1), i, ounoise if train else False)
+                            medium = observations[env.world.leader[(np.arange(model.num_agents)-1)%model.num_agents]]
+                            action = model.select_action(K.cat([observations[[i], ], medium[[i], ]], dim=-1), i, ounoise if train else False)
                             #action = model.select_action(K.cat([observations[[i], ], observations[[(i-1)%model.num_agents], ]], dim=-1), i, ounoise if train else False)
                         else:
                             if config['exploration'] == 'EOBO':
@@ -367,6 +367,9 @@ def run(model, experiment_args, train=True):
             #prev_medium = medium
             if config['agent_alg'] == 'MSDDPG':
                 next_medium = next_observations[[env.world.leader], ]
+            elif config['agent_alg'] == 'MS3DDPG':
+                next_medium = next_observations[env.world.leader[(np.arange(model.num_agents)-1)%model.num_agents]]
+
             ## do not forget to delete these two lines
             #prev_medium = K.cat([next_observations[[env.world.leader], ], (env.world.leader+1)*K.ones((1,1,1), dtype=observations.dtype)], dim=-1)
             #prev_medium = K.tensor(prev_medium, dtype=K.float32)     
@@ -383,7 +386,7 @@ def run(model, experiment_args, train=True):
                         memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, comm_contexts, next_comm_contexts, prev_actions)
                     else:
                         memory.push(observations, actions, next_observations, rewards, medium, comm_actions, comm_rewards, prev_actions, None)
-                elif config['agent_alg'] == 'MSDDPG':
+                elif config['agent_alg'] == 'MSDDPG' or config['agent_alg'] == 'MS3DDPG':
                         memory.push(observations, actions, next_observations, rewards, medium, None, None, None, next_medium)
                 else:
                     memory.push(observations, actions, next_observations, rewards)
@@ -407,7 +410,7 @@ def run(model, experiment_args, train=True):
                             else:
                                 batch = Transition_Comm(*zip(*memory.sample(config['batch_size'])))
                         else:
-                            if config['agent_alg'] == 'MSDDPG':
+                            if config['agent_alg'] == 'MSDDPG' or config['agent_alg'] == 'MS3DDPG':
                                 batch = Transition_Comm(*zip(*memory.sample(config['batch_size'])))
                             else:
                                 batch = Transition(*zip(*memory.sample(config['batch_size'])))

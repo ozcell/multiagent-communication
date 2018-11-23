@@ -293,8 +293,8 @@ class MAHCDDPG(PARENT):
         self.comm_actors_optim = []
         
         for i in range(num_agents):
-            self.comm_actors.append(Comm_Actor(observation_space, 1, discrete_comm, F.sigmoid).to(device))
-            self.comm_actors_target.append(Comm_Actor(observation_space, 1, discrete_comm, F.sigmoid).to(device))
+            self.comm_actors.append(Comm_Actor(observation_space, 1+discrete_comm, discrete_comm, F.sigmoid).to(device))
+            self.comm_actors_target.append(Comm_Actor(observation_space, 1+discrete_comm, discrete_comm, F.sigmoid).to(device))
             self.comm_actors_optim.append(optimizer(self.comm_actors[i].parameters(), lr = comm_actor_lr))
             
         for i in range(num_agents):
@@ -310,14 +310,14 @@ class MAHCDDPG(PARENT):
         self.comm_critics_optim = []
         
         for i in range(num_agents):
-            self.comm_critics.append(Comm_Critic(observation_space*num_agents, 1*num_agents).to(device))
-            self.comm_critics_target.append(Comm_Critic(observation_space*num_agents, 1*num_agents).to(device))
+            self.comm_critics.append(Comm_Critic(observation_space*num_agents, (1+discrete_comm)*num_agents).to(device))
+            self.comm_critics_target.append(Comm_Critic(observation_space*num_agents, (1+discrete_comm)*num_agents).to(device))
             self.comm_critics_optim.append(optimizer(self.comm_critics[i].parameters(), lr = comm_critic_lr))
 
         for i in range(num_agents):
             hard_update(self.comm_critics_target[i], self.comm_critics[i]) 
 
-        print('ahanda')
+        print('amanin')
 
     def select_comm_action(self, state, i_agent, exploration=False):
         self.comm_actors[i_agent].eval()
